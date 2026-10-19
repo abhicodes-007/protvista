@@ -82,6 +82,19 @@ async function get(url) {
   return { body, headers: response.headers, retrieved };
 }
 
+/**
+ * Escape a CSV field value per RFC 4180: quote if it contains comma, double-quote, or newline.
+ *
+ * @param {string | number} val
+ */
+export function csvField(val) {
+  const str = String(val ?? '');
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replaceAll('"', '""')}"`;
+  }
+  return str;
+}
+
 const toTitle = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
 /**
@@ -120,13 +133,14 @@ export function buildContacts(ligandData, drugConfigs = DRUG_CONFIGS) {
       const aa = toTitle(res.startCode);
       const residueLabel = `${aa}${start}`;
       const pdbs = (
-        res.allPDBEntries ||
-        (res.interactingPDBEntries ?? []).map((e) => e.pdbId)
+        res.interactingPDBEntries?.map((e) => e.pdbId) ??
+        res.allPDBEntries ??
+        []
       ).sort();
       const uniquePdbs = Array.from(new Set(pdbs));
       const count = uniquePdbs.length;
       const pdbListStr = uniquePdbs.join(' ');
-      const firstPdb = uniquePdbs[0];
+      const firstPdb = uniquePdbs[0] ?? '';
       const samplePdbs =
         count > 5
           ? `${uniquePdbs.slice(0, 5).join(', ')}, …`
@@ -137,11 +151,23 @@ export function buildContacts(ligandData, drugConfigs = DRUG_CONFIGS) {
           ? `${cfg.drug} contacts ${residueLabel} in 1 PDB entry (${samplePdbs})`
           : `${cfg.drug} contacts ${residueLabel} in ${count} PDB entries (${samplePdbs})`;
 
-      const quotedDesc = desc.includes(',') ? `"${desc}"` : desc;
-      const url = `https://www.ebi.ac.uk/pdbe/entry/pdb/${firstPdb}`;
+      const url = firstPdb
+        ? `https://www.ebi.ac.uk/pdbe/entry/pdb/${firstPdb}`
+        : '';
 
       rows.push(
-        `${cfg.type},${start},${end},${quotedDesc},${cfg.drug},${cfg.ccd},${residueLabel},${count},${pdbListStr},${url}`
+        [
+          csvField(cfg.type),
+          csvField(start),
+          csvField(end),
+          csvField(desc),
+          csvField(cfg.drug),
+          csvField(cfg.ccd),
+          csvField(residueLabel),
+          csvField(count),
+          csvField(pdbListStr),
+          csvField(url),
+        ].join(',')
       );
     }
   }

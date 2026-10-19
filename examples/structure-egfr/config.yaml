@@ -105,7 +105,7 @@ rows:
         kind: features
         filter: DOMAIN
         data: features
-        description: Receptor L, furin-like cysteine-rich, and protein kinase domains
+        description: Protein kinase domain
       - id: transmem
         label: Transmembrane Region
         kind: features

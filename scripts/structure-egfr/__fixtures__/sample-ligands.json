@@ -11,9 +11,13 @@
         "indexType": "UNIPROT",
         "interactingPDBEntries": [
           { "pdbId": "4g5j", "entityId": 1, "chainIds": "A" },
-          { "pdbId": "4g5p", "entityId": 1, "chainIds": "A" }
+          { "pdbId": "4g5p", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "4i24", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "5d41", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "6duk", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "7k1i", "entityId": 1, "chainIds": "A" }
         ],
-        "allPDBEntries": ["4g5j", "4g5p"]
+        "allPDBEntries": ["4g5j", "4g5p", "4i24", "5d41", "6duk", "7k1i"]
       },
       {
         "startIndex": 797,
@@ -24,7 +28,7 @@
         "interactingPDBEntries": [
           { "pdbId": "4g5j", "entityId": 1, "chainIds": "A" }
         ],
-        "allPDBEntries": ["4g5j"]
+        "allPDBEntries": ["4g5j", "4g5p", "4i24", "5d41", "6duk", "7k1i"]
       }
     ]
   }

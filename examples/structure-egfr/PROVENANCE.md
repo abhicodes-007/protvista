@@ -9,19 +9,21 @@ It visualizes co-crystal drug binding contacts for 7 clinically approved tyrosin
 | `drug-contacts.csv` | Co-crystal ligand binding contacts across solved PDB entries mapped to canonical UniProt coordinates. |
 | `config.yaml` | Standalone ProtVista community viewer configuration with 5 curated groups. |
 | `preset.json` | Community view registration metadata (`label`, `description`, `length: 1210`). |
+| `provenance.json` | Machine-readable provenance record with checksums, source releases, and citations. |
 | `PROVENANCE.md` | Attribution, mapping methodology, and source citations. |
 
 ## Sources & Attribution
 
 | Resource | Description | Source / Release | Licence |
 | --- | --- | --- | --- |
-| **PDBe Knowledge Base (PDBe-KB)** | Residue-level ligand binding site interactions for human EGFR | PDBe SIFTS residue mapping API | CC0 1.0 Universal |
+| **PDBe Knowledge Base (PDBe-KB)** | Residue-level ligand binding site interactions for human EGFR | `graph-api/uniprot/ligand_sites/P00533` (PDBe-KB 2026.1) | CC0 1.0 Universal |
 | **UniProtKB** | Canonical human EGFR sequence (`P00533`), domain boundaries, catalytic sites | UniProtKB release 2026_03 | CC BY 4.0 |
-| **AlphaFold DB** | Per-residue pLDDT confidence scores for AF-P00533-F1 | AlphaFold DB v2.0 | CC BY 4.0 |
+| **AlphaFold DB** | Per-residue pLDDT confidence scores for AF-P00533-F1 | Fetched dynamically at render time | CC BY 4.0 |
 
 ### Citation
 - Varadi M, et al. *PDBe-KB: a community-driven resource for structural and functional annotations.* **Protein Science** 2022; 31(10): e4439. DOI: [10.1002/pro.4439](https://doi.org/10.1002/pro.4439)
-- UniProt Consortium. *UniProt: the Universal Protein Knowledgebase in 2023.* **Nucleic Acids Res.** 2023; 51(D1): D523–D531.
+- The UniProt Consortium. *UniProt: the Universal Protein Knowledgebase in 2025.* **Nucleic Acids Res.** 2025; 53(D1): D609–D617. DOI: [10.1093/nar/gkae1010](https://doi.org/10.1093/nar/gkae1010)
+- Dana JM, et al. *SIFTS: updated Structure Integration with Function, Taxonomy and Sequences resource.* **Nucleic Acids Res.** 2019; 47(D1): D482–D489. DOI: [10.1093/nar/gky1114](https://doi.org/10.1093/nar/gky1114)
 
 ## Ligands Included
 
