@@ -88,7 +88,7 @@ The package root defines the whole viewer. These subpaths load less:
 | Import | What you get |
 | --- | --- |
 | `protvista-uniprot/config` | `filterConfig` and `colorConfig` — the variant filter and colour config — with no element and no side effects. Use it when you only need the data, e.g. to filter variants in your own UI. |
-| `protvista-uniprot/structure` | Defines `<protvista-uniprot-structure>` alone — the 3D structure viewer and its table — without the track viewer. Its attributes are `accession`, `no-table`, `selected-id` and `color-theme`. |
+| `protvista-uniprot/structure` | Defines `<protvista-uniprot-structure>` alone — the 3D structure viewer and its table — without the track viewer. Its attributes are `accession`, `no-table`, `selected-id` and `color-theme`, plus `uniprot-url`, `alphafold-url` and `beacons-url`: URL templates that replace the EBI lookups it makes (defaults under [The viewer's own requests](/protvista/configure#the-viewers-own-requests)), with `{accession}` and any `data-*` attribute filling their `{tokens}`. |
 | `protvista-uniprot/react` | Types only: JSX declarations for both elements (see [Rich tooltips in React](/protvista/react-integration#typing-the-elements-in-jsx)). |
 
 ## The attributes you'll use

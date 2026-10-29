@@ -24,6 +24,26 @@ import { inlineSvg } from './icons/inline.js';
 import loaderStyles from './styles/loader-styles.js';
 import { injectStyleOnce, installTokenDefaults } from './styles/inject.js';
 import { warnLostProperties } from './lost-properties.js';
+import { mergeVariables, substituteTemplate } from './schema/variables.js';
+
+/**
+ * The URL templates the panel requests, by the property that overrides each
+ * (`uniprot-url`, `alphafold-url`, `beacons-url`, `beacons-checksum-url`).
+ * `{accession}` and `{checksum}` come from the element's attributes, and any
+ * other `{token}` from its `data-*` attributes.
+ */
+const defaultUrls = {
+  // We are showing PDBe models returned by UniProt's API as there is inconsistency between UniProt's recognised ones and 3d-beacons.
+  uniprotUrl: 'https://rest.uniprot.org/uniprotkb/{accession}',
+  // AlphaMissense predictions are only available in AF predictions endpoint
+  alphafoldUrl:
+    'https://alphafold.ebi.ac.uk/api/prediction/{accession}?include_complexes=true',
+  // exclude_provider accepts only value hence 'pdbe' as majority of the models are from there if querying by accession
+  beaconsUrl:
+    'https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/uniprot/summary/{accession}.json?exclude_provider=pdbe',
+  beaconsChecksumUrl:
+    'https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5',
+};
 
 const alphaFoldLinkUrl = 'https://alphafold.ebi.ac.uk/search/text/';
 const foldseekUrl = `https://search.foldseek.com/search`;
@@ -426,6 +446,10 @@ class ProtvistaUniprotStructure extends LitElement {
   private columns: ColumnConfig<ProcessedStructureData>[] = [];
   selectedId?: string;
   noTable?: boolean;
+  uniprotUrl?: string;
+  alphafoldUrl?: string;
+  beaconsUrl?: string;
+  beaconsChecksumUrl?: string;
 
   constructor() {
     super();
@@ -454,7 +478,37 @@ class ProtvistaUniprotStructure extends LitElement {
       isoforms: { type: Object, attribute: false },
       selectedId: { type: String, attribute: 'selected-id' },
       noTable: { type: Boolean, attribute: 'no-table' },
+      uniprotUrl: { type: String, attribute: 'uniprot-url' },
+      alphafoldUrl: { type: String, attribute: 'alphafold-url' },
+      beaconsUrl: { type: String, attribute: 'beacons-url' },
+      beaconsChecksumUrl: { type: String, attribute: 'beacons-checksum-url' },
     };
+  }
+
+  /**
+   * The URL to request for `which`: its override when set, otherwise the
+   * default, with its `{tokens}` filled. Empty — no request, as for the
+   * requests a checksum lookup doesn't make — when a token has no usable
+   * value, which is reported rather than requested half-built.
+   */
+  private requestUrl(which: keyof typeof defaultUrls): string {
+    const template = this[which] ?? defaultUrls[which];
+    const vars = mergeVariables({
+      dataset: this.dataset,
+      accession: this.accession,
+    });
+    if (this.checksum !== undefined) vars.checksum = this.checksum;
+    const result = substituteTemplate(template, vars);
+    if ('url' in result) return result.url;
+    const tokens = (
+      'unresolved' in result ? result.unresolved : result.invalid
+    ).map((t) => `{${t}}`);
+    console.warn(
+      `[protvista-uniprot-structure] Not fetching '${template}': ` +
+        `${'unresolved' in result ? 'undefined' : 'invalid value for'} ` +
+        `${tokens.join(', ')}.`
+    );
+    return '';
   }
 
   private getColumns(): ColumnConfig<ProcessedStructureData>[] {
@@ -554,21 +608,12 @@ class ProtvistaUniprotStructure extends LitElement {
     super.connectedCallback();
     warnLostProperties(this, { data: 'data' });
     if (!this.accession && !this.checksum) return;
-    // We are showing PDBe models returned by UniProt's API as there is inconsistency between UniProt's recognised ones and 3d-beacons.
-    const pdbUrl =
-      this.accession && !this.checksum
-        ? `https://rest.uniprot.org/uniprotkb/${this.accession}`
-        : '';
-    // AlphaMissense predictions are only available in AF predictions endpoint
-    const alphaFoldUrl =
-      this.accession && !this.checksum
-        ? `https://alphafold.ebi.ac.uk/api/prediction/${this.accession}?include_complexes=true`
-        : '';
-    // exclude_provider accepts only value hence 'pdbe' as majority of the models are from there if querying by accession
-    const beaconsUrl =
-      this.accession && !this.checksum
-        ? `https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/uniprot/summary/${this.accession}.json?exclude_provider=pdbe`
-        : `https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id=${this.checksum}&type=md5`;
+    const byAccession = !!this.accession && !this.checksum;
+    const pdbUrl = byAccession ? this.requestUrl('uniprotUrl') : '';
+    const alphaFoldUrl = byAccession ? this.requestUrl('alphafoldUrl') : '';
+    const beaconsUrl = this.requestUrl(
+      byAccession ? 'beaconsUrl' : 'beaconsChecksumUrl'
+    );
 
     const rawData = await fetchAll([pdbUrl, alphaFoldUrl, beaconsUrl]);
     this.loading = false;
