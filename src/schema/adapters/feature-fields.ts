@@ -3,9 +3,9 @@
  *
  * The CSV/TSV and JSON feature decoders keep every column or key an author
  * adds beyond `type, start, end, description, score`, so a file and the same
- * records written inline render the same way (see "Unrecognised fields" in
- * `specs/config-approach.md`). One rule, shared by both decoders, sorts each
- * extra name into a group:
+ * records written inline render the same way, and a `dataTooltip` that names
+ * an extra column (say `gene`) finds it rather than silently showing nothing.
+ * One rule, shared by both decoders, sorts each extra name into a group:
  *
  *   - **render** — `color`, `shape`, `fill`, `opacity`. Nightingale reads these
  *     per record ahead of the track's `rendering:`, so they are trimmed,

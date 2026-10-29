@@ -371,7 +371,7 @@ export interface GroupConfig {
    * This is not an initial-mount-only default: `setRowVisibility` and the
    * show/hide control write this very field, so a user's choice and an
    * author's are the same state, and `getConfig()` exports whichever is
-   * current (see `specs/config-approach.md`). Defaults to `false`.
+   * current. Defaults to `false`.
    */
   hidden?: boolean;
 
@@ -535,8 +535,8 @@ export interface TrackConfig {
    *
    * As with `GroupConfig.hidden`, this is the same field
    * `setTrackVisibility` and the show/hide control write — a user's choice
-   * and an author's are the same state (see `specs/config-approach.md`).
-   * Defaults to `false`.
+   * and an author's are the same state, and `getConfig()` exports whichever
+   * is current. Defaults to `false`.
    */
   hidden?: boolean;
 
@@ -1041,8 +1041,9 @@ export interface SemanticKindDefinition {
    * `format:`, inline records, `setTrackData()` — for free.
    *
    * Omit it for a kind that can only read its provider's feed, and name the
-   * kind for that provider so authors are not invited to try (see the naming
-   * rule in `specs/config-approach.md`).
+   * kind for that provider (`alphafold-confidence`, not `confidence-score`) so
+   * authors are not invited to try: a plain domain word (`features`,
+   * `variants`) promises that an author's own file works on the kind.
    */
   shape?: ShapeName;
   /**
