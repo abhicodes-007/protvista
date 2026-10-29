@@ -14,6 +14,16 @@ collapsed row. `layout: default` draws a feature track's overlapping features
 on one row. Configs that leave these fields out look the same as before; a
 config that already set them will now render the way it asked to.
 
+### Fixed: the structure panel's legend follows `color-theme`
+
+With an AlphaFold model, setting `color-theme="alphamissense"` (as an
+attribute or the `colorTheme` property, before or after the structure loaded)
+coloured the 3D model by AlphaMissense pathogenicity but left the legend
+explaining pLDDT confidence bands. The legend now matches the colour scale
+however it was set, not only after a radio click. When the selected model has
+no AlphaMissense annotations, `alphamissense` falls back to `alphafold`, so the
+model, the radios and the legend all show confidence.
+
 ### Added: a warning for rendering settings that have no effect
 
 Some `rendering` settings only work on certain tracks: `colorScale` on coloured

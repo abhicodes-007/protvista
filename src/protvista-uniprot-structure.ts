@@ -651,7 +651,13 @@ class ProtvistaUniprotStructure extends LitElement {
   protected override willUpdate(changed: PropertyValues) {
     // Apply when either selection or data changes — covers consumer
     // pre-setting selected-id before the async fetch resolves.
-    if (!changed.has('selectedId') && !changed.has('data')) return;
+    if (changed.has('selectedId') || changed.has('data')) {
+      this.updateSelection();
+    }
+    this.syncAlphaFoldLegend();
+  }
+
+  private updateSelection() {
     // Wait for the first data assignment before deciding what to show; a
     // consumer-set selectedId arriving before fetch should not clear anything.
     if (!this.data) return;
@@ -666,6 +672,19 @@ class ProtvistaUniprotStructure extends LitElement {
       // the viewer state so a previous structure does not linger on screen.
       this.clearViewer();
     }
+  }
+
+  // The AlphaFold legend follows the colour scale however it was set: a radio
+  // click, or the `color-theme` attribute or property, before or after load.
+  // Pathogenicity needs the model's AlphaMissense annotations; without them
+  // fall back to confidence, so the viewer, the radios and the legend agree.
+  private syncAlphaFoldLegend() {
+    if (this.metaInfo !== AFMetaInfo && this.metaInfo !== AMMetaInfo) return;
+    if (this.colorTheme === 'alphamissense' && !this.alphamissenseAvailable) {
+      this.colorTheme = 'alphafold';
+    }
+    this.metaInfo =
+      this.colorTheme === 'alphamissense' ? AMMetaInfo : AFMetaInfo;
   }
 
   private clearViewer() {
@@ -803,7 +822,6 @@ class ProtvistaUniprotStructure extends LitElement {
   toggleColorTheme(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     this.colorTheme = input.value;
-    this.metaInfo = input.value === 'alphafold' ? AFMetaInfo : AMMetaInfo;
   }
 
   render() {
