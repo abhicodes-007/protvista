@@ -35,11 +35,13 @@ have no link, because they are generated from code.
 
 One malformed line in an AlphaMissense annotations CSV made the heatmap track
 fail with "null is not iterable"; both AlphaMissense tracks now skip such a
-line. On the pathogenicity track, a residue whose average score was exactly
+line, as well as a line whose score isn't a number (which before showed up as
+a `NaN` heatmap cell and blanked out that residue's average) or whose position
+is 0. On the pathogenicity track, a residue whose average score was exactly
 1.0 was dropped, shifting every residue after it one place to the left; it is
 now shown as pathogenic. A residue missing from the file no longer breaks the
-track: it keeps its place (drawn in the scale's lowest colour), so the residues
-after it stay aligned with the sequence.
+track: it keeps its place, left blank rather than painted in a pathogenicity
+colour, so the residues after it stay aligned with the sequence.
 
 ## 5.0.0-beta.5 — 2026-10-06
 

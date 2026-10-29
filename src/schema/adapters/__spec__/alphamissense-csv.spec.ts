@@ -39,6 +39,27 @@ describe('alphamissense-average-csv adapter', () => {
     );
   });
 
+  it('skips a row whose score is not a number, so it does not spoil the average', async () => {
+    stubCSV([
+      'M1A,0.05,LBen',
+      'A2V,0.5,Amb',
+      'A2C,abc,Amb',
+      'A2D,NaN,Amb',
+      'A2E,0.9,LPath,extra',
+      'K3R,0.9,LPath',
+    ]);
+    expect(await alphamissensePathogenicityAdapter(prediction, protein)).toBe(
+      'HlP'
+    );
+  });
+
+  it('skips a position-0 row', async () => {
+    stubCSV(['M0A,0.5,Amb', 'M1A,0.05,LBen', 'K3R,0.9,LPath']);
+    expect(await alphamissensePathogenicityAdapter(prediction, protein)).toBe(
+      'H-P'
+    );
+  });
+
   it('maps a score of exactly 1 to the top category', async () => {
     stubCSV(['M1A,1,LPath', 'A2V,1.0,LPath']);
     expect(await alphamissensePathogenicityAdapter(prediction, protein)).toBe(
@@ -77,6 +98,36 @@ describe('alphamissense-full-csv adapter', () => {
 
   it('skips a malformed row instead of throwing', async () => {
     stubCSV(['M1A,0.05,LBen', 'not a row', 'A2', '', 'K3R,0.9,LPath']);
+    expect(await alphamissenseHeatmapAdapter(prediction, protein)).toEqual([
+      { xValue: 1, yValue: 'A', score: 0.05 },
+      { xValue: 3, yValue: 'R', score: 0.9 },
+    ]);
+  });
+
+  it('skips a row whose score is not a number', async () => {
+    stubCSV([
+      'M1A,0.05,LBen',
+      'A2V,abc,Amb',
+      'A2C,NaN,Amb',
+      'A2D, ,Amb',
+      'K3R,0.9,LPath',
+    ]);
+    expect(await alphamissenseHeatmapAdapter(prediction, protein)).toEqual([
+      { xValue: 1, yValue: 'A', score: 0.05 },
+      { xValue: 3, yValue: 'R', score: 0.9 },
+    ]);
+  });
+
+  it('skips a row with an extra column', async () => {
+    stubCSV(['M1A,0.05,LBen', 'A2V,0.5,LPath,extra', 'K3R,0.9,LPath']);
+    expect(await alphamissenseHeatmapAdapter(prediction, protein)).toEqual([
+      { xValue: 1, yValue: 'A', score: 0.05 },
+      { xValue: 3, yValue: 'R', score: 0.9 },
+    ]);
+  });
+
+  it('skips a position-0 row', async () => {
+    stubCSV(['M0A,0.5,Amb', 'M1A,0.05,LBen', 'K3R,0.9,LPath']);
     expect(await alphamissenseHeatmapAdapter(prediction, protein)).toEqual([
       { xValue: 1, yValue: 'A', score: 0.05 },
       { xValue: 3, yValue: 'R', score: 0.9 },

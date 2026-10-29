@@ -41,10 +41,12 @@ const getPathogenicityCode = (score: number): string | undefined => {
 };
 
 // Stands in for a position the CSV has no (usable) score for, so every later
-// residue stays at its own position instead of shifting left by one. It is
-// in no colour scale, which nightingale-colored-sequence draws at the scale's
-// 0 end.
-const NO_SCORE = '-';
+// residue stays at its own position instead of shifting left by one. The
+// `alphamissense-ramp` theme (src/renderer/render-helpers.ts) gives it a
+// transparent stop of its own: nightingale-colored-sequence draws a character
+// missing from its scale at the scale's 0 end, which here is the
+// certainly-benign colour.
+export const NO_SCORE = '-';
 
 export type AlphaMissenseRow = {
   wildType: string;
@@ -57,8 +59,9 @@ export type AlphaMissenseRow = {
 /**
  * Parse an AlphaMissense annotations CSV into rows, shared by this adapter
  * and `alphamissense-full-csv`. The header and any row that doesn't match
- * `cellSplitter` (blank, short or stray lines) are skipped rather than
- * thrown on.
+ * `cellSplitter` (blank, short or stray lines), names a position below 1, or
+ * whose score isn't a number (text, or an extra column the greedy score group
+ * swallowed) is skipped rather than thrown on or passed on as `NaN`.
  */
 export const parseRows = (rawText: string): Array<AlphaMissenseRow> => {
   const rows: Array<AlphaMissenseRow> = [];
@@ -82,11 +85,15 @@ export const parseRows = (rawText: string): Array<AlphaMissenseRow> => {
     if (position < 1) {
       continue;
     }
+    const score = +pathogenicityScore;
+    if (!pathogenicityScore.trim() || !Number.isFinite(score)) {
+      continue;
+    }
     rows.push({
       wildType,
       position,
       mutated,
-      pathogenicityScore: +pathogenicityScore,
+      pathogenicityScore: score,
       pathogenicityLabel,
     });
   }
