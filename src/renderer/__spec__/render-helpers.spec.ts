@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   colorScaleToAttrs,
+  colorScaleToColorFn,
   renderingToAttrs,
 } from '../render-helpers.js';
 
@@ -95,6 +96,76 @@ describe('colorScaleToAttrs', () => {
       colorRange:
         '#ff7d45:0,#ffdb13:50,#65cbf3:70,#0053d6:90,#0053d6:100',
     });
+  });
+});
+
+describe('colorScaleToColorFn', () => {
+  it('returns undefined when there is no colour scale to resolve', () => {
+    expect(colorScaleToColorFn(undefined)).toBeUndefined();
+    expect(colorScaleToColorFn({})).toBeUndefined();
+    expect(colorScaleToColorFn({ theme: 'not-registered' })).toBeUndefined();
+  });
+
+  it('draws alphamissense-ramp exactly as the d3 amColorScale it replaces', () => {
+    // Reference values from nightingale-structure's `amColorScale` (a d3
+    // `scaleLinear` over the same nine stops), including extrapolation past
+    // both ends and `undefined` for a missing score.
+    const fn = colorScaleToColorFn({ theme: 'alphamissense-ramp' })!;
+    const expected: Array<[number, string]> = [
+      [-0.5, 'rgb(0, 0, 88)'],
+      [0, 'rgb(33, 102, 172)'],
+      [0.05, 'rgb(48, 121, 180)'],
+      [0.1132, 'rgb(66, 144, 191)'],
+      [0.2, 'rgb(123, 178, 207)'],
+      [0.3, 'rgb(176, 205, 220)'],
+      [0.4527, 'rgb(226, 226, 226)'],
+      [0.5, 'rgb(230, 219, 212)'],
+      [0.6, 'rgb(237, 201, 181)'],
+      [0.75, 'rgb(229, 147, 116)'],
+      [0.9, 'rgb(201, 75, 66)'],
+      [1, 'rgb(178, 24, 43)'],
+      [1.5, 'rgb(65, 0, 0)'],
+    ];
+    for (const [score, color] of expected) expect(fn(score)).toBe(color);
+    expect(fn(NaN)).toBeUndefined();
+    expect(fn(undefined as unknown as number)).toBeUndefined();
+  });
+
+  it('interpolates explicit stops, which win over the theme', () => {
+    const fn = colorScaleToColorFn({
+      theme: 'alphamissense-ramp',
+      stops: [
+        { value: 1, color: '#fff' },
+        { value: 0, color: '#000000' },
+      ],
+    })!;
+    expect(fn(0)).toBe('rgb(0, 0, 0)');
+    expect(fn(0.5)).toBe('rgb(128, 128, 128)');
+    expect(fn(1)).toBe('rgb(255, 255, 255)');
+  });
+
+  it('looks a registered theme up through getTheme', () => {
+    const fn = colorScaleToColorFn({ theme: 'mine' }, (name) =>
+      name === 'mine'
+        ? [
+            { value: 0, color: '#ff0000' },
+            { value: 10, color: '#0000ff' },
+          ]
+        : undefined
+    )!;
+    expect(fn(5)).toBe('rgb(128, 0, 128)');
+  });
+
+  it('steps between stops it cannot interpolate', () => {
+    const fn = colorScaleToColorFn({
+      stops: [
+        { value: 0, color: 'red' },
+        { value: 1, color: 'blue' },
+      ],
+    })!;
+    expect(fn(-1)).toBe('red');
+    expect(fn(0.5)).toBe('red');
+    expect(fn(1)).toBe('blue');
   });
 });
 

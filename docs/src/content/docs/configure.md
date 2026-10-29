@@ -178,10 +178,11 @@ under `defaults:` for every track. Each field is resolved separately, and the
 first of these that sets it wins: the track, its `kind`, its group, then
 `defaults:`.
 
-The `kind` step matters for `colorScale`: `alphafold-confidence` and
-`alphamissense-pathogenicity` bring their own ramp, which beats a group's or
-`defaults:` `colorScale`. A `colorScale` on such a group colours only the
-group's collapsed row; to recolour the track itself, set it on the track.
+The `kind` step matters for `colorScale`: `alphafold-confidence`,
+`alphamissense-pathogenicity` and `alphamissense-heatmap` bring their own
+ramp, which beats a group's or `defaults:` `colorScale`. A `colorScale` on
+such a group colours only the group's collapsed row; to recolour the track
+itself, set it on the track.
 
 | Field | What it does | Where it has an effect |
 | --- | --- | --- |
@@ -189,7 +190,7 @@ group's collapsed row; to recolour the track itself, set it on the track.
 | `shape` | The glyph of every feature the track draws, one of the [shape names](/protvista/type-and-shape-vocabulary). A feature's own `shape` column wins. | Feature tracks |
 | `height` | The track's height in pixels. Unset, a feature track is 40 px tall, a line graph 50, a coloured sequence 13, a heatmap 300 and the variant plot 500. On a group, it also sizes the collapsed row. | Every track |
 | `layout` | `non-overlapping` (the default) gives overlapping features a row each; `default` draws them all on one row. | Feature tracks |
-| `colorScale` | A colour gradient: a `theme` (`alphafold-ramp`, `alphamissense-ramp`) or explicit `stops`. | Coloured-sequence tracks (`alphafold-confidence`, `alphamissense-pathogenicity`) |
+| `colorScale` | A colour gradient: a `theme` (`alphafold-ramp`, `alphamissense-ramp`) or explicit `stops`. | Coloured-sequence tracks (`alphafold-confidence`, `alphamissense-pathogenicity`) and heatmaps (`alphamissense-heatmap`) |
 
 The rows of a `non-overlapping` track share its height, so ten overlapping
 features (isoforms, say) get thin rows at the default 40 px. Give them room:

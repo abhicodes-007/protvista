@@ -798,32 +798,36 @@ function checkRows(
 }
 
 /**
- * The rendering fields only one built-in component reads, and what it does
+ * The rendering fields only some built-in components read, and what they do
  * with them. `getTrack()` hands `color`, `shape` and `layout` to the canvas
- * feature track alone and `colorScale` (as `scale` / `color-range`) to the
- * coloured sequence alone; the other built-ins have no such attribute.
+ * feature track alone, and `colorScale` reaches the coloured sequence (as
+ * `scale` / `color-range`) and the heatmap (as its per-cell colour, set in
+ * `_loadDataInComponents`); the other built-ins have no such attribute.
  * `height` is not here: every built-in reads it.
  */
 const SINGLE_COMPONENT_FIELDS = [
   {
     field: 'color',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'colours its features.',
   },
   {
     field: 'shape',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'draws feature glyphs.',
   },
   {
     field: 'layout',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'lays features out in rows.',
   },
   {
     field: 'colorScale',
-    component: 'nightingale-colored-sequence',
-    does: 'draws a colour scale.',
+    components: [
+      'nightingale-colored-sequence',
+      'nightingale-sequence-heatmap',
+    ],
+    does: 'draw a colour scale.',
   },
 ] as const;
 
@@ -866,7 +870,7 @@ function ignoresField(
 ): boolean {
   return (
     (RENDERABLE_COMPONENT_NAMES as ReadonlySet<string>).has(component) &&
-    component !== entry.component
+    !(entry.components as readonly string[]).includes(component)
   );
 }
 
@@ -890,7 +894,7 @@ function checkTrackRenderingFields(
     issues.push({
       path: trackPath,
       severity: 'warning',
-      message: `Track ${trackPath}: rendering.${entry.field} has no effect on ${component}; only ${entry.component} ${entry.does}${featureColorHint(entry.field, [component])}`,
+      message: `Track ${trackPath}: rendering.${entry.field} has no effect on ${component}; only ${entry.components.join(' and ')} ${entry.does}${featureColorHint(entry.field, [component])}`,
       code: 'rendering-field-ignored',
     });
   }
@@ -925,7 +929,7 @@ function checkGroupRenderingFields(
     issues.push({
       path: group.id,
       severity: 'warning',
-      message: `Group ${group.id}: rendering.${entry.field} has no effect on any of its tracks; only ${entry.component} ${entry.does}${featureColorHint(entry.field, components)}`,
+      message: `Group ${group.id}: rendering.${entry.field} has no effect on any of its tracks; only ${entry.components.join(' and ')} ${entry.does}${featureColorHint(entry.field, components)}`,
       code: 'rendering-field-ignored',
     });
   }

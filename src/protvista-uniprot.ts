@@ -14,7 +14,6 @@ import type NightingaleVariationCanvas from '@nightingale-elements/nightingale-v
 import type NightingaleSequenceHeatmap from '@nightingale-elements/nightingale-sequence-heatmap';
 import type NightingaleFilter from '@nightingale-elements/nightingale-filter';
 import type { Filter } from '@nightingale-elements/nightingale-filter';
-import { amColorScale } from '@nightingale-elements/nightingale-structure';
 
 // Adapter functions are no longer imported or held here: they live in the
 // schema registry (seeded from `BUILTIN_ADAPTERS`) and the loader resolves
@@ -73,7 +72,10 @@ import type {
   NormalizedRow,
   NormalizedTrack,
 } from './schema/normalize.js';
-import { renderingToAttrs } from './renderer/render-helpers.js';
+import {
+  colorScaleToColorFn,
+  renderingToAttrs,
+} from './renderer/render-helpers.js';
 import {
   aggregatePayload,
   drawnAggregateTracks,
@@ -422,6 +424,14 @@ const hasRenderableData = (value: unknown): boolean => {
  */
 const showsSeriesLabel = (tracks: readonly NormalizedTrack[]): boolean =>
   !tracks.some((t) => t.data?.some((d) => isAuthoredSource(d)));
+
+/**
+ * The id of the `<div>` a heatmap draws into, unique per track key.
+ * `heatmap-component` finds it with `d3.select('#' + id)`, an unescaped CSS
+ * selector, so characters a selector would misread become `_`.
+ */
+const heatmapDivId = (key: string): string =>
+  `${CSS_PREFIX}-heatmap-${key.replace(/[^\w-]/g, '_')}`;
 
 /** Each built-in component's height when `rendering.height` is unset. */
 const DEFAULT_TRACK_HEIGHT: Record<string, number> = {
@@ -2218,6 +2228,11 @@ class ProtvistaUniprot extends LitElement {
    * and a sibling's targeted Retry recomputes it. Without the clear, the row
    * kept a `⚠` saying it could not draw while it drew correctly — and a
    * `render` failure offers no Retry, so nothing else would ever lift it.
+   *
+   * A heatmap track's payload is also handed over through `setHeatmapData`
+   * here (`_setHeatmapData`), inside the same `try`, so a heatmap that cannot
+   * take its data is badged and reported like any other track, and only a
+   * payload it accepts lifts the badge.
    */
   private _assignComponentData(
     element: NightingaleTrackCanvas,
@@ -2226,6 +2241,7 @@ class ProtvistaUniprot extends LitElement {
   ) {
     try {
       element.data = payload as never;
+      this._setHeatmapData(element, payload, key);
     } catch (error) {
       this._reportRenderFailure(key, error);
       return;
@@ -2321,6 +2337,70 @@ class ProtvistaUniprot extends LitElement {
   }
 
   /**
+   * Draw a heatmap track's payload. `<nightingale-sequence-heatmap>` ignores
+   * `.data`: it takes its cells through `setHeatmapData(xDomain, yDomain,
+   * data)`, and its colours through `heatmapInstance.setColor` once it has
+   * rendered.
+   *
+   * Matched on the track that `key` names, not on its row, so a heatmap draws
+   * in any group and in a standalone row. `element` is that track's own
+   * element (looked up by its per-track id), so two heatmaps each get their
+   * own data. The colours come from the track's resolved `colorScale` — the
+   * `alphamissense-heatmap` kind's `alphamissense-ramp` preset unless the
+   * config says otherwise — and a heatmap with no `colorScale` keeps the
+   * component's own colouring.
+   *
+   * No payload is nothing to draw, and not this track's failure to report: a
+   * failed fetch is reported where it happened. A payload that is not an array
+   * of cells throws, which `_assignComponentData` reports for this track
+   * alone.
+   */
+  private _setHeatmapData(element: HTMLElement, payload: unknown, key: string) {
+    const origin = this._resolveRowOrigin(key);
+    if (!origin?.trackId) return;
+    const track = this.config?.rows
+      .find((row) => row.id === origin.groupId)
+      ?.tracks.find((t) => t.id === origin.trackId);
+    if (
+      !track ||
+      (track.kind !== 'alphamissense-heatmap' &&
+        track.component !== 'nightingale-sequence-heatmap')
+    ) {
+      return;
+    }
+    // A kind override to another component renders an element that has no
+    // heatmap API; it takes its data through `.data` like any other.
+    const heatmap = element as unknown as NightingaleSequenceHeatmap;
+    if (typeof heatmap.setHeatmapData !== 'function') return;
+    if (payload == null || !this.sequence) return;
+    if (!Array.isArray(payload)) {
+      throw new TypeError(
+        `a heatmap takes an array of { xValue, yValue, score } records, not ${typeof payload}`
+      );
+    }
+    const cells = payload as Array<{ yValue?: string; score: number }>;
+    const xDomain = Array.from(
+      { length: this.sequence.length },
+      (_, i) => i + 1
+    );
+    const yDomain = [...new Set(cells.map((cell) => cell.yValue))] as string[];
+    heatmap.setHeatmapData(
+      xDomain,
+      yDomain,
+      cells as Parameters<NightingaleSequenceHeatmap['setHeatmapData']>[2]
+    );
+    const colorFor = colorScaleToColorFn(track.rendering.colorScale, (name) =>
+      this.registry.getTheme(name)
+    );
+    if (!colorFor) return;
+    heatmap.updateComplete.then(() => {
+      // `undefined` for a cell with no score, as the d3 scale this replaced
+      // returned.
+      heatmap.heatmapInstance?.setColor((d) => colorFor(d.score) as string);
+    });
+  }
+
+  /**
    * Which row (and track, when the key names one) a data-push key belongs to.
    * `trackId: null` means the key named a row's collapsed aggregate.
    */
@@ -2385,46 +2465,6 @@ class ProtvistaUniprot extends LitElement {
               this.data[`${id}-${track.id}`],
               `${id}-${track.id}`
             );
-          }
-        }
-      }
-
-      // TODO(#alphamissense-hardcoded): this branch matches on a
-      // specific group id from the shipped config to drive the
-      // heatmap-specific setHeatmapData/colour-scale wiring. A consumer
-      // config that uses a different id for its AlphaMissense group
-      // will silently skip this wiring. Lifting the branch out of the
-      // component and into either (a) a track-level `kind:
-      // 'alphamissense-heatmap'` that owns the setup, or (b) a generic
-      // `nightingale-sequence-heatmap` lifecycle hook, would remove
-      // the id match and let arbitrary consumer configs drive the
-      // heatmap renderer.
-      if (
-        currentGroup?.id === 'ALPHAMISSENSE_PATHOGENICITY' &&
-        currentGroup.tracks
-      ) {
-        for (const track of currentGroup.tracks) {
-          if (track.component === 'nightingale-sequence-heatmap') {
-            const heatmapComponent =
-              this.querySelector<NightingaleSequenceHeatmap>(
-                'nightingale-sequence-heatmap'
-              );
-            if (heatmapComponent && this.sequence) {
-              const heatmapData = this.data[`${id}-${track.id}`];
-              const xDomain = Array.from(
-                { length: this.sequence.length },
-                (_, i) => i + 1
-              );
-              const yDomain = [
-                ...new Set(heatmapData.map((hotMapItem) => hotMapItem.yValue)),
-              ] as string[];
-              heatmapComponent.setHeatmapData(xDomain, yDomain, heatmapData);
-              heatmapComponent.updateComplete.then(() => {
-                heatmapComponent.heatmapInstance.setColor((d) =>
-                  amColorScale(d.score)
-                );
-              });
-            }
           }
         }
       }
@@ -6160,7 +6200,7 @@ class ProtvistaUniprot extends LitElement {
         return html`
           <nightingale-sequence-heatmap
             id="${CSS_PREFIX}-track-${id}"
-            heatmap-id="seq-heatmap"
+            heatmap-id="${heatmapDivId(id)}"
             length="${this.sequence?.length}"
             display-start="${this.displayCoordinates?.start}"
             display-end="${this.displayCoordinates?.end}"

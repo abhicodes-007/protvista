@@ -4,6 +4,17 @@
 
 - Added `uniprot-isoforms-json` adapter and "APP isoforms" community view. The adapter is opt-in and makes no new requests unless named in a config.
 
+### Fixed: an AlphaMissense heatmap draws in any row
+
+An `alphamissense-heatmap` track drew nothing unless its group's id was
+`ALPHAMISSENSE_PATHOGENICITY`, so a heatmap in a group of your own, or on a row
+of its own, stayed blank. With two heatmaps, the first was handed every
+heatmap's data. Each heatmap track now gets its own data, in any group or
+standalone row, coloured by its `colorScale`: the `alphamissense-ramp` unless
+the config sets another. A heatmap whose data is not an array of cells gets a
+`⚠` badge and a `protvista-error` event instead of stopping the other tracks
+from drawing. The default UniProt view looks the same as before.
+
 ### Fixed: the variant and RNA-editing count graphs count the last residue
 
 The line graphs from `uniprot-variation-counts-json` and
@@ -38,10 +49,11 @@ unavailable and keep the confidence legend.
 ### Added: a warning for rendering settings that have no effect
 
 Some `rendering` settings only work on certain tracks: `colorScale` on coloured
-sequence tracks (`alphafold-confidence`, `alphamissense-pathogenicity`), and
-`layout`, `color` and `shape` on feature tracks. Setting one where it can't
-take effect now gives a `rendering-field-ignored` validation warning instead of
-being silently ignored. The config still loads. The Configure page's
+sequence and heatmap tracks (`alphafold-confidence`,
+`alphamissense-pathogenicity`, `alphamissense-heatmap`), and `layout`, `color`
+and `shape` on feature tracks. Setting one where it can't take effect now
+gives a `rendering-field-ignored` validation warning instead of being silently
+ignored. The config still loads. The Configure page's
 `rendering` section lists each field, where it works, and the order in which a
 track, its kind, its group and `defaults:` take precedence.
 
