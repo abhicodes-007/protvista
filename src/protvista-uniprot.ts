@@ -10,7 +10,6 @@ import { frame } from 'timing-functions';
 // here: they live in `src/built-in-components.ts` and are defined via
 // the registry-driven registration walk (see `_init` / `connectedCallback`).
 import type NightingaleTrackCanvas from '@nightingale-elements/nightingale-track-canvas';
-import type NightingaleVariationCanvas from '@nightingale-elements/nightingale-variation-canvas';
 import type NightingaleSequenceHeatmap from '@nightingale-elements/nightingale-sequence-heatmap';
 import type NightingaleFilter from '@nightingale-elements/nightingale-filter';
 import type { Filter } from '@nightingale-elements/nightingale-filter';
@@ -2619,20 +2618,6 @@ class ProtvistaUniprot extends LitElement {
         'protvista:script-start',
         'protvista:first-render'
       );
-    }
-
-    const filterComponent =
-      this.querySelector<NightingaleFilter>('nightingale-filter');
-    if (filterComponent && filterComponent.filters !== filterConfig) {
-      filterComponent.filters = filterConfig as Filter[];
-    }
-
-    const variationComponent = this.querySelector<NightingaleVariationCanvas>(
-      'nightingale-variation-canvas'
-    );
-
-    if (variationComponent && variationComponent?.colorConfig !== colorConfig) {
-      variationComponent.colorConfig = colorConfig;
     }
 
     // Consumed before any early return: left set past the `suspend` return
@@ -6245,6 +6230,7 @@ class ProtvistaUniprot extends LitElement {
       <nightingale-filter
         style="minWidth: 20%"
         for="${CSS_PREFIX}-track-${forId}"
+        .filters=${filterConfig as Filter[]}
         @change="${(e: CustomEvent) => this.handleFilterClick(e, forId)}"
       ></nightingale-filter>
     `;
@@ -6289,6 +6275,7 @@ class ProtvistaUniprot extends LitElement {
             display-start="${this.displayCoordinates?.start}"
             display-end="${this.displayCoordinates?.end}"
             id="${CSS_PREFIX}-track-${id}"
+            .colorConfig=${colorConfig}
             highlight-event="onclick"
             use-ctrl-to-zoom
           >
