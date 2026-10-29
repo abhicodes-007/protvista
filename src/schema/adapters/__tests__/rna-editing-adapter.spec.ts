@@ -4,11 +4,24 @@
  * variation track can draw, keeping the feature's own fields alongside.
  */
 
-import { describe, it, expect } from 'vitest';
-import { AminoAcid } from '@nightingale-elements/nightingale-variation-canvas';
+import { describe, it, expect, vi } from 'vitest';
 
 import { rnaEditingAdapter } from '../rna-editing-adapter.js';
 import type { TransformedRnaEditing } from '../types/rna-editing.js';
+
+// The real module cannot load under jsdom (its core needs ResizeObserver), so
+// it is stubbed. The global stub in `src/__spec__/nightingale-mocks.ts` sets
+// `AminoAcid.Empty` to '', and an adapter that hard-codes '' would pass
+// against that. This override pins it to the real enum value instead.
+vi.mock('@nightingale-elements/nightingale-variation-canvas', () => ({
+  default: class extends HTMLElement {},
+  // nightingale-variation's proteinAPI: `enum AminoAcid { Empty = "*", ... }`
+  AminoAcid: { Empty: '*' },
+  ClinicalSignificance: {},
+}));
+
+/** `AminoAcid.Empty` in nightingale-variation: the variation track's "no residue". */
+const AMINO_ACID_EMPTY = '*';
 
 type Adapted = { sequence: string; variants: TransformedRnaEditing[] };
 
@@ -82,7 +95,7 @@ describe('rnaEditingAdapter', () => {
   it('uses AminoAcid.Empty when mutatedType is missing', () => {
     const { variants } = adapt(response([feature({ mutatedType: undefined })]));
 
-    expect(variants[0].variant).toBe(AminoAcid.Empty);
+    expect(variants[0].variant).toBe(AMINO_ACID_EMPTY);
   });
 
   it('leaves accession undefined when genomicLocation is missing', () => {
