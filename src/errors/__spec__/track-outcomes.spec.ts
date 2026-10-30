@@ -188,6 +188,22 @@ describe('classifyTrackOutcomes', () => {
     ]);
   });
 
+  it('does not mark a from:file adapter failure without a format as authored', () => {
+    // Unlike a fetch failure, an adapter failure is authored only when the
+    // source names a format, so the badge keeps the file it came from.
+    const { errors } = classify({
+      rows: [row('g', [track('a', { from: 'file', adapter: 'x' })])],
+      trackUrls: { 'g-a': ['./hits.txt'] },
+      trackFailures: { 'g-a': { severity: 'error', message: 'bad' } },
+    });
+    expect(errors.get('g-a')).toEqual({
+      url: './hits.txt',
+      kind: 'adapter',
+      message: 'bad',
+      groupId: 'g',
+      trackId: 'a',
+    });
+  });
   it('does not let a processing error resurrect a silent provider 4xx', () => {
     const { errors, absences } = classify({
       rows: [row('g', [track('a')])],

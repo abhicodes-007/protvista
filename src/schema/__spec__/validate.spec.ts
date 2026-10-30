@@ -912,6 +912,21 @@ describe('validateConfig — kind vs file format', () => {
       result.issues.filter((i) => i.code === 'kind-format-mismatch')
     ).toEqual([]);
   });
+
+  it('reports only multi-source-format, not a kind/format mismatch too', () => {
+    // A multi-source descriptor stops at the multi-source issue: BED on a
+    // `variants` track would also be a kind/format mismatch, but one issue
+    // per descriptor keeps the author's fix list short.
+    const result = validateConfig(
+      withData('variants', {
+        from: 'file',
+        url: ['./a.bed', './b.bed'],
+        format: 'bed',
+      }),
+      freshRegistry()
+    );
+    expect(result.issues.map((i) => i.code)).toEqual(['multi-source-format']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
