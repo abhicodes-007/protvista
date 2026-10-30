@@ -25,10 +25,11 @@ import {
 /**
  * How a track's data failed. See `_trackErrors`.
  *
- * The first three are transport outcomes, classified by the fetch closure in
- * `_loadData`. `adapter` is the processing outcome: the body arrived fine but
- * the decoder, the shape validator or the named adapter threw on it — a
- * malformed file, which is an authoring error and not a service one.
+ * The first three are transport outcomes, classified by `_loadData`'s
+ * fetcher (`makeRecordingFetch`). `adapter` is the processing outcome: the
+ * body arrived fine but the decoder, the shape validator or the named
+ * adapter threw on it — a malformed file, which is an authoring error and
+ * not a service one.
  * `render` is the last step: the payload was built, and the Nightingale
  * element rejected it when handed over (see `_assignComponentData`).
  */
@@ -89,7 +90,7 @@ export type TrackFetchError = {
   trackId: string | null;
 };
 
-/** A track-less fetch failure, as the fetch closure in `_loadData` records it. */
+/** A track-less fetch failure, as `makeRecordingFetch` records it. */
 export type UrlFetchError = Omit<TrackFetchError, 'groupId' | 'trackId'>;
 
 /** Every fetch failure among one track's URLs, in URL order. */

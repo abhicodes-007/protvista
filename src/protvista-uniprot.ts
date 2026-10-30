@@ -165,6 +165,7 @@ import {
   type FetchErrorKind,
   type TrackAbsence,
   type TrackFetchError,
+  type UrlFetchError,
 } from './errors/track-outcomes.js';
 import type { FormattedError } from './errors/format.js';
 import {
@@ -235,6 +236,9 @@ const LOADING_ANNOUNCEMENT = 'Loading protein data…';
  */
 const LIVE_REGION_SETTLE_MS = 100;
 
+/** What one `loadProtvistaData()` call resolves to. */
+type LoadResult = Awaited<ReturnType<typeof loadProtvistaData>>;
+
 /**
  * Outcome of the top-level sequence fetch (`loadEntry`). Either the parsed
  * entry body, or a classified failure — the same `network` / `http` /
@@ -277,6 +281,93 @@ const SEQUENCE_MODE_KEY = '\u0000sequence';
 
 const isAbortError = (e: unknown): boolean =>
   (e as { name?: string } | null)?.name === 'AbortError';
+
+/**
+ * Record `failure` in `errors` under its URL — unless `error` is the
+ * `AbortError` of a superseding `_loadData()` re-entry, which is silently
+ * ignored. Returns the `null` the fetcher leaves in the per-URL slot either
+ * way. See `makeRecordingFetch`.
+ */
+const recordFetchFailure = (
+  errors: Map<string, UrlFetchError>,
+  error: unknown,
+  failure: UrlFetchError
+): null => {
+  if (!isAbortError(error)) errors.set(failure.url, failure);
+  return null;
+};
+
+/**
+ * The per-URL fetcher `_loadData` hands the loader. It records each URL's
+ * failure in `errors`, keyed by the *substituted* URL it was handed — the
+ * same URLs the loader reports back in `trackUrls`, so `_collectTrackErrors`
+ * can correlate failures to tracks without re-deriving anything.
+ *
+ * Preserves the legacy fetchAll semantics: 4xx/5xx and thrown errors are
+ * swallowed, leaving a null in the per-URL slot. Three distinct failure
+ * modes are recorded so the badge / event can tell "couldn't reach the
+ * server" from "server said 500" from "unparseable body". `AbortError` from a
+ * superseding `_loadData()` re-entry (via `signal`) is recognised and
+ * silently returned as `null` so it doesn't pollute the console.
+ *
+ * The fetcher classifies and returns; it does not log. A URL is not a
+ * failure site that knows anything worth saying: it cannot name the track
+ * that wanted the data, and whether a 404 here even *is* a failure depends
+ * on the source kind, which only the correlation pass can see. So the whole
+ * decision — including the console line — moves there, behind the routing
+ * table.
+ */
+const makeRecordingFetch =
+  (signal: AbortSignal, errors: Map<string, UrlFetchError>) =>
+  async (url: string, responseType: 'text' | 'json'): Promise<unknown> => {
+    let response: Response;
+    try {
+      response = await fetch(url, { signal });
+    } catch (error) {
+      return recordFetchFailure(errors, error, {
+        url,
+        kind: 'network',
+        cause: error,
+      });
+    }
+    if (!response.ok) {
+      errors.set(url, {
+        url,
+        kind: 'http',
+        status: response.status,
+      });
+      return null;
+    }
+    // Delimited bodies (CSV / TSV / BED) reach their decoder as raw text;
+    // everything else — JSON files included — is parsed as JSON.
+    // `response.text()` does not reject on content, so the parse-failure
+    // branch below only guards the JSON path.
+    if (responseType === 'text') {
+      try {
+        return await response.text();
+      } catch (error) {
+        return recordFetchFailure(errors, error, {
+          url,
+          kind: 'parse',
+          cause: error,
+        });
+      }
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      // The parser's own text says where it gave up — on an author's
+      // malformed file, the one detail that makes it fixable.
+      return recordFetchFailure(errors, error, {
+        url,
+        kind: 'parse',
+        ...(error instanceof Error && error.message
+          ? { message: error.message }
+          : {}),
+        cause: error,
+      });
+    }
+  };
 
 /**
  * Whether a value carries something a Nightingale track can actually draw.
@@ -1468,6 +1559,102 @@ class ProtvistaUniprot extends LitElement {
     // full load, which is the one that will commit it.
     if (only && this._loadBatches.some((b) => !b.only)) return;
 
+    const { batch, variables } = this._beginBatch(only);
+    const { signal } = batch.controller;
+
+    // Records this batch's fetch failures, keyed by the *substituted* URL the
+    // fetcher was handed (see `makeRecordingFetch`).
+    const fetchErrors = new Map<string, UrlFetchError>();
+
+    const result = await loadProtvistaData(
+      variables,
+      this.config,
+      makeRecordingFetch(signal, fetchErrors),
+      // Resolve adapter functions by name through the registry — the same
+      // source of truth config validation consults, so a consumer's
+      // `registerAdapter()` adapter both validates and runs.
+      (name) => this.registry.getAdapter(name),
+      this.customTrackData,
+      only ? { only, previousData: this.data } : undefined
+    );
+
+    // If a newer load started while we were awaiting, drop the result
+    // on the floor — the newer call owns subsequent state writes.
+    if (signal.aborted) return;
+
+    const {
+      trackUrls,
+      trackCoordinates,
+      trackFailures,
+      trackWarnings,
+      skipWarnings,
+      tooltipFieldMisses,
+    } = result;
+
+    // Correlate the "broken" fetch failures back to the tracks/groups
+    // that own them (4xx is skipped as "missing" — see
+    // `_collectTrackErrors`), and surface the tracks whose *processing*
+    // threw. Done after the abort guard so a stale batch can't clobber a
+    // newer batch's error maps. A targeted retry passes `only` so it updates
+    // just those tracks' error state.
+    this._trackUrls = only ? { ...this._trackUrls, ...trackUrls } : trackUrls;
+    // The notes this load supersedes, beside the errors it supersedes: a full
+    // load replaces every load note and may announce again; a targeted retry
+    // replaces only its tracks' own.
+    if (only) {
+      this._clearNotes('load', only);
+    } else {
+      this._clearNotes('load');
+      this._announcedNotes = '';
+    }
+    this._collectTrackErrors(trackUrls, fetchErrors, trackFailures, only);
+
+    this._reportSkipWarnings(skipWarnings);
+
+    // What a feature decoder noticed without rejecting the file — a column it
+    // dropped, a colour the canvas cannot paint. Once per load, like the
+    // coordinate warning; a targeted retry reports only the tracks it reran.
+    this._reportDecodeWarnings(trackWarnings, trackCoordinates);
+
+    // An authored tooltip template that names a field no record carries.
+    // Once per load, after the decoder's own warnings about the same data.
+    this._reportTooltipFieldMisses(tooltipFieldMisses);
+
+    this._mergeLoadResult(result, this.config, protein, only);
+
+    // The variation filter's pristine baseline now rides along in
+    // `data` under `${groupId}-${trackId}${UNFILTERED_SUFFIX}` for any
+    // track that opts into `filterUI: 'nightingale-filter'` — written by
+    // the loader, consumed by `handleFilterClick`. No id-based copy step
+    // is needed here anymore.
+
+    // Drop ourselves from the in-flight set. A superseding call would have
+    // aborted us and the guard above would have returned early, so
+    // reaching here means we still own our writes.
+    this._loadBatches = this._loadBatches.filter((b) => b !== batch);
+
+    this._tracksPending = false;
+    this._settleLoading();
+    markOnce('protvista:data-loaded');
+    measureOnce(
+      'protvista:fetch-and-parse',
+      'protvista:script-start',
+      'protvista:data-loaded'
+    );
+    // `loading` and `hasData` are plain private fields (not in
+    // `properties`), so Lit's reactive system doesn't pick them up.
+    // `this.data` reassignment above *is* tracked, but we issue the
+    // explicit update anyway to keep a single notify site.
+    this.requestUpdate();
+  }
+
+  /**
+   * Start a `_loadData()` batch: drop the state the load supersedes, read
+   * the template variables it will fetch with, and register its abort
+   * controller in `_loadBatches`, aborting every in-flight batch it
+   * supersedes.
+   */
+  private _beginBatch(only: Set<string> | undefined) {
     // Drop the coordinate checks this load supersedes (see
     // `_pendingCoordinateChecks`) — after the promotion above, so a
     // promoted retry drops them all.
@@ -1510,129 +1697,17 @@ class ProtvistaUniprot extends LitElement {
     const controller = new AbortController();
     const batch = { controller, only };
     this._loadBatches.push(batch);
-    const { signal } = controller;
+    return { batch, variables };
+  }
 
-    // Records this batch's fetch failures, keyed by the *substituted* URL the
-    // closure was handed — the same URLs the loader reports back in
-    // `trackUrls`, so `_collectTrackErrors` can correlate failures to tracks
-    // without re-deriving anything.
-    //
-    // The closure classifies and returns; it does not log. A URL is not a
-    // failure site that knows anything worth saying: it cannot name the track
-    // that wanted the data, and whether a 404 here even *is* a failure depends
-    // on the source kind, which only the correlation pass can see. So the
-    // whole decision — including the console line — moves there, behind the
-    // routing table.
-    const fetchErrors = new Map<
-      string,
-      Omit<TrackFetchError, 'groupId' | 'trackId'>
-    >();
-
-    const {
-      rawData,
-      data,
-      hasData,
-      trackUrls,
-      trackCoordinates,
-      trackFailures,
-      trackWarnings,
-      skipWarnings,
-      tooltipFieldMisses,
-    } = await loadProtvistaData(
-      variables,
-      this.config,
-      // Preserve the legacy fetchAll semantics: 4xx/5xx and thrown
-      // errors are swallowed with a warning, leaving a null in the
-      // per-URL slot. `AbortError` thrown by a later `_loadData()`
-      // re-entry is recognised and silently returned as `null` so it
-      // doesn't pollute the console.
-      async (url, responseType) => {
-        // Three distinct failure modes are recorded so the badge / event
-        // can tell "couldn't reach the server" from "server said 500"
-        // from "unparseable body". Each still returns `null` into the
-        // per-URL slot (legacy swallow-and-continue). `AbortError` from a
-        // superseding `_loadData()` re-entry is silently ignored.
-        let response: Response;
-        try {
-          response = await fetch(url, { signal });
-        } catch (error) {
-          if (isAbortError(error)) return null;
-          fetchErrors.set(url, { url, kind: 'network', cause: error });
-          return null;
-        }
-        if (!response.ok) {
-          fetchErrors.set(url, {
-            url,
-            kind: 'http',
-            status: response.status,
-          });
-          return null;
-        }
-        // Delimited bodies (CSV / TSV / BED) reach their decoder as raw text;
-        // everything else — JSON files included — is parsed as JSON.
-        // `response.text()` does not reject on content, so the parse-failure
-        // branch below only guards the JSON path.
-        if (responseType === 'text') {
-          try {
-            return await response.text();
-          } catch (error) {
-            if (isAbortError(error)) return null;
-            fetchErrors.set(url, { url, kind: 'parse', cause: error });
-            return null;
-          }
-        }
-        try {
-          return await response.json();
-        } catch (error) {
-          if (isAbortError(error)) return null;
-          // The parser's own text says where it gave up — on an author's
-          // malformed file, the one detail that makes it fixable.
-          fetchErrors.set(url, {
-            url,
-            kind: 'parse',
-            ...(error instanceof Error && error.message
-              ? { message: error.message }
-              : {}),
-            cause: error,
-          });
-          return null;
-        }
-      },
-      // Resolve adapter functions by name through the registry — the same
-      // source of truth config validation consults, so a consumer's
-      // `registerAdapter()` adapter both validates and runs.
-      (name) => this.registry.getAdapter(name),
-      this.customTrackData,
-      only ? { only, previousData: this.data } : undefined
-    );
-
-    // If a newer load started while we were awaiting, drop the result
-    // on the floor — the newer call owns subsequent state writes.
-    if (signal.aborted) return;
-
-    // Correlate the "broken" fetch failures back to the tracks/groups
-    // that own them (4xx is skipped as "missing" — see
-    // `_collectTrackErrors`), and surface the tracks whose *processing*
-    // threw. Done after the abort guard so a stale batch can't clobber a
-    // newer batch's error maps. A targeted retry passes `only` so it updates
-    // just those tracks' error state.
-    this._trackUrls = only ? { ...this._trackUrls, ...trackUrls } : trackUrls;
-    // The notes this load supersedes, beside the errors it supersedes: a full
-    // load replaces every load note and may announce again; a targeted retry
-    // replaces only its tracks' own.
-    if (only) {
-      this._clearNotes('load', only);
-    } else {
-      this._clearNotes('load');
-      this._announcedNotes = '';
-    }
-    this._collectTrackErrors(trackUrls, fetchErrors, trackFailures, only);
-
-    // A URL template left unfetched because a `{token}` had no usable value.
-    // Viewer-scoped: one template can feed several tracks, and the fix (a
-    // `variables:` entry or a `data-*` attribute) is not any one row's. The
-    // visitor notice names the tracks: one that fetched nothing has no data
-    // (and no row), one that fetched its other URLs is incomplete.
+  /**
+   * A URL template left unfetched because a `{token}` had no usable value.
+   * Viewer-scoped: one template can feed several tracks, and the fix (a
+   * `variables:` entry or a `data-*` attribute) is not any one row's. The
+   * visitor notice names the tracks: one that fetched nothing has no data
+   * (and no row), one that fetched its other URLs is incomplete.
+   */
+  private _reportSkipWarnings(skipWarnings: LoadResult['skipWarnings']) {
     for (const { message, template, tracks } of skipWarnings) {
       const names: string[] = [];
       const partial: string[] = [];
@@ -1659,16 +1734,20 @@ class ProtvistaUniprot extends LitElement {
         }
       );
     }
+  }
 
-    // What a feature decoder noticed without rejecting the file — a column it
-    // dropped, a colour the canvas cannot paint. Once per load, like the
-    // coordinate warning; a targeted retry reports only the tracks it reran.
-    this._reportDecodeWarnings(trackWarnings, trackCoordinates);
-
-    // An authored tooltip template that names a field no record carries.
-    // Once per load, after the decoder's own warnings about the same data.
-    this._reportTooltipFieldMisses(tooltipFieldMisses);
-
+  /**
+   * Commit a landed `_loadData()` batch's data: `rawData`, `hasData` (and the
+   * public event when data first appears), then the per-track and aggregate
+   * `data` via `_mergeTrackData`.
+   */
+  private _mergeLoadResult(
+    result: LoadResult,
+    config: NormalizedConfig,
+    protein: string,
+    only: Set<string> | undefined
+  ) {
+    const { rawData, hasData } = result;
     // A targeted retry only carries the reloaded URLs' raw responses —
     // merge so the rest of `rawData` survives; a full load replaces it.
     this.rawData = only ? { ...this.rawData, ...rawData } : rawData;
@@ -1688,10 +1767,25 @@ class ProtvistaUniprot extends LitElement {
         })
       );
     }
+    this._mergeTrackData(result, config, protein, only);
+  }
+
+  /**
+   * Splice a landed batch's per-track `data` into `this.data`, queue its
+   * authored tracks' coordinate checks, and rebuild the aggregates of the
+   * groups it touched. See `_mergeLoadResult`.
+   */
+  private _mergeTrackData(
+    { data, trackCoordinates }: LoadResult,
+    config: NormalizedConfig,
+    protein: string,
+    only: Set<string> | undefined
+  ) {
     // Reference-swap so Lit's reactive system sees the change and
     // re-renders without needing a manual `requestUpdate()` at the
-    // bottom of this method (the other two lines above still aren't
-    // tracked properties, so we keep the call).
+    // bottom of `_loadData` (the `rawData`/`hasData` writes in
+    // `_mergeLoadResult` still aren't tracked properties, so we keep the
+    // call).
     // Null-prototype so a bare-id aggregate lookup (`this.data[group.id]`)
     // can't resolve to an inherited `Object.prototype` member for a group
     // literally named `constructor`/`toString`/… — the same guarantee the
@@ -1712,7 +1806,7 @@ class ProtvistaUniprot extends LitElement {
     const reloadedKeys =
       only ??
       new Set(
-        this.config.rows.flatMap((g) => g.tracks.map((t) => `${g.id}-${t.id}`))
+        config.rows.flatMap((g) => g.tracks.map((t) => `${g.id}-${t.id}`))
       );
     for (const key of reloadedKeys) {
       if (!(key in data)) delete merged[key];
@@ -1735,7 +1829,7 @@ class ProtvistaUniprot extends LitElement {
     // track. Rebuilding from the merged per-track keys is order-independent
     // and self-consistent (and a no-op for a full load). Uses the loader's
     // aggregate rule (`aggregatePayload`) against the current layout.
-    for (const group of this.config.rows) {
+    for (const group of config.rows) {
       const touched = group.tracks.some((t) =>
         reloadedKeys.has(`${group.id}-${t.id}`)
       );
@@ -1747,31 +1841,6 @@ class ProtvistaUniprot extends LitElement {
     }
     this.data = merged;
     this._checkCoordinates();
-
-    // The variation filter's pristine baseline now rides along in
-    // `data` under `${groupId}-${trackId}${UNFILTERED_SUFFIX}` for any
-    // track that opts into `filterUI: 'nightingale-filter'` — written by
-    // the loader, consumed by `handleFilterClick`. No id-based copy step
-    // is needed here anymore.
-
-    // Drop ourselves from the in-flight set. A superseding call would have
-    // aborted us and the guard above would have returned early, so
-    // reaching here means we still own our writes.
-    this._loadBatches = this._loadBatches.filter((b) => b !== batch);
-
-    this._tracksPending = false;
-    this._settleLoading();
-    markOnce('protvista:data-loaded');
-    measureOnce(
-      'protvista:fetch-and-parse',
-      'protvista:script-start',
-      'protvista:data-loaded'
-    );
-    // `loading` and `hasData` are plain private fields (not in
-    // `properties`), so Lit's reactive system doesn't pick them up.
-    // `this.data` reassignment above *is* tracked, but we issue the
-    // explicit update anyway to keep a single notify site.
-    this.requestUpdate();
   }
 
   /**
