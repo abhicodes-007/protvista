@@ -584,9 +584,10 @@ class ProtvistaUniprot extends LitElement {
   /** Hide the 3D structure group (`nostructure` attribute). */
   nostructure: boolean;
   /**
-   * Opt out of the built-in click tooltip. Consumers rendering a React overlay typically set this.
-   * @see specs/config-approach.md "React host integration" (and docs/react-integration.md) for the
-   * `change`-event listener pattern React hosts pair with this attribute.
+   * Opt out of the built-in click tooltip. Consumers rendering a React overlay typically set this,
+   * then listen for the element's `change` event and draw their own overlay from its `detail`
+   * (`eventType`, `feature`, `coords`, `track`). Declarative `tooltipContent` is still resolved
+   * and readable off `detail.feature`; only the built-in popover is not mounted.
    */
   notooltip?: boolean;
   /**
@@ -3638,8 +3639,9 @@ class ProtvistaUniprot extends LitElement {
           );
         }
         if (absent.length > 0) continue;
-        // `from: custom` with nothing injected. Same expected absence, and the
-        // wording is the one `specs/config-approach.md` pins.
+        // `from: custom` with nothing injected. Same expected absence; the
+        // message is the documented one `load-data.ts` builds, passed through
+        // unchanged.
         const failure = trackFailures[key];
         if (failure?.severity === 'info') {
           this._report(
