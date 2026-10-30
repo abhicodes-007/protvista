@@ -651,7 +651,13 @@ class ProtvistaUniprotStructure extends LitElement {
   protected override willUpdate(changed: PropertyValues) {
     // Apply when either selection or data changes — covers consumer
     // pre-setting selected-id before the async fetch resolves.
-    if (!changed.has('selectedId') && !changed.has('data')) return;
+    if (changed.has('selectedId') || changed.has('data')) {
+      this.updateSelection();
+    }
+    this.syncAlphaFoldLegend();
+  }
+
+  private updateSelection() {
     // Wait for the first data assignment before deciding what to show; a
     // consumer-set selectedId arriving before fetch should not clear anything.
     if (!this.data) return;
@@ -666,6 +672,24 @@ class ProtvistaUniprotStructure extends LitElement {
       // the viewer state so a previous structure does not linger on screen.
       this.clearViewer();
     }
+  }
+
+  // The colour scale actually shown. Pathogenicity needs the selected model's
+  // AlphaMissense annotations; without them the panel shows confidence, so the
+  // viewer, the radios and the legend agree. `colorTheme` keeps the requested
+  // value, so it applies again once an annotated model is selected.
+  private get displayedColorTheme(): string {
+    return this.colorTheme === 'alphamissense' && this.alphamissenseAvailable
+      ? 'alphamissense'
+      : 'alphafold';
+  }
+
+  // The AlphaFold legend follows the colour scale however it was set: a radio
+  // click, or the `color-theme` attribute or property, before or after load.
+  private syncAlphaFoldLegend() {
+    if (this.metaInfo !== AFMetaInfo && this.metaInfo !== AMMetaInfo) return;
+    this.metaInfo =
+      this.displayedColorTheme === 'alphamissense' ? AMMetaInfo : AFMetaInfo;
   }
 
   private clearViewer() {
@@ -692,7 +716,9 @@ class ProtvistaUniprotStructure extends LitElement {
       this.colorTheme = 'alphafold';
       if (source === 'AlphaFold DB') {
         this.metaInfo = AFMetaInfo;
-        this.alphamissenseAvailable = !!amAnnotationsUrl;
+        // The model-url viewer has no AlphaMissense colouring, so pathogenicity
+        // is unavailable here even when the row has annotations.
+        this.alphamissenseAvailable = false;
       }
     } else {
       this.structureId = id;
@@ -803,7 +829,6 @@ class ProtvistaUniprotStructure extends LitElement {
   toggleColorTheme(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     this.colorTheme = input.value;
-    this.metaInfo = input.value === 'alphafold' ? AFMetaInfo : AMMetaInfo;
   }
 
   render() {
@@ -826,7 +851,7 @@ class ProtvistaUniprotStructure extends LitElement {
                           name=${this.colorSchemeGroupId}
                           value="alphafold"
                           @click=${this.toggleColorTheme}
-                          .checked=${this.colorTheme !== 'alphamissense'}
+                          .checked=${this.displayedColorTheme !== 'alphamissense'}
                         />
                         <label for=${alphafoldRadioId}>Confidence</label>
                       </div>
@@ -839,7 +864,7 @@ class ProtvistaUniprotStructure extends LitElement {
                           name=${this.colorSchemeGroupId}
                           value="alphamissense"
                           @click=${this.toggleColorTheme}
-                          .checked=${this.colorTheme === 'alphamissense'}
+                          .checked=${this.displayedColorTheme === 'alphamissense'}
                           ?disabled=${!this.alphamissenseAvailable}
                         />
                         <label
@@ -865,7 +890,7 @@ class ProtvistaUniprotStructure extends LitElement {
               ? html`<nightingale-structure
                   structure-id=${this.structureId}
                   protein-accession=${this.accession}
-                  color-theme=${this.colorTheme}
+                  color-theme=${this.displayedColorTheme}
                 ></nightingale-structure>`
               : nothing
           }
