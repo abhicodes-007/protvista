@@ -21,8 +21,11 @@ attribute or the `colorTheme` property, before or after the structure loaded)
 coloured the 3D model by AlphaMissense pathogenicity but left the legend
 explaining pLDDT confidence bands. The legend now matches the colour scale
 however it was set, not only after a radio click. When the selected model has
-no AlphaMissense annotations, `alphamissense` falls back to `alphafold`, so the
-model, the radios and the legend all show confidence.
+no AlphaMissense annotations, the model, the radios and the legend all show
+confidence instead; `colorTheme` keeps the requested `alphamissense`, so it
+applies again when an annotated model is selected. AlphaFold complexes, whose
+viewer has no AlphaMissense colouring, now show the Pathogenicity radio as
+unavailable and keep the confidence legend.
 
 ### Added: a warning for rendering settings that have no effect
 

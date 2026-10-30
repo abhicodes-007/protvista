@@ -674,17 +674,22 @@ class ProtvistaUniprotStructure extends LitElement {
     }
   }
 
+  // The colour scale actually shown. Pathogenicity needs the selected model's
+  // AlphaMissense annotations; without them the panel shows confidence, so the
+  // viewer, the radios and the legend agree. `colorTheme` keeps the requested
+  // value, so it applies again once an annotated model is selected.
+  private get displayedColorTheme(): string {
+    return this.colorTheme === 'alphamissense' && this.alphamissenseAvailable
+      ? 'alphamissense'
+      : 'alphafold';
+  }
+
   // The AlphaFold legend follows the colour scale however it was set: a radio
   // click, or the `color-theme` attribute or property, before or after load.
-  // Pathogenicity needs the model's AlphaMissense annotations; without them
-  // fall back to confidence, so the viewer, the radios and the legend agree.
   private syncAlphaFoldLegend() {
     if (this.metaInfo !== AFMetaInfo && this.metaInfo !== AMMetaInfo) return;
-    if (this.colorTheme === 'alphamissense' && !this.alphamissenseAvailable) {
-      this.colorTheme = 'alphafold';
-    }
     this.metaInfo =
-      this.colorTheme === 'alphamissense' ? AMMetaInfo : AFMetaInfo;
+      this.displayedColorTheme === 'alphamissense' ? AMMetaInfo : AFMetaInfo;
   }
 
   private clearViewer() {
@@ -711,7 +716,9 @@ class ProtvistaUniprotStructure extends LitElement {
       this.colorTheme = 'alphafold';
       if (source === 'AlphaFold DB') {
         this.metaInfo = AFMetaInfo;
-        this.alphamissenseAvailable = !!amAnnotationsUrl;
+        // The model-url viewer has no AlphaMissense colouring, so pathogenicity
+        // is unavailable here even when the row has annotations.
+        this.alphamissenseAvailable = false;
       }
     } else {
       this.structureId = id;
@@ -844,7 +851,7 @@ class ProtvistaUniprotStructure extends LitElement {
                           name=${this.colorSchemeGroupId}
                           value="alphafold"
                           @click=${this.toggleColorTheme}
-                          .checked=${this.colorTheme !== 'alphamissense'}
+                          .checked=${this.displayedColorTheme !== 'alphamissense'}
                         />
                         <label for=${alphafoldRadioId}>Confidence</label>
                       </div>
@@ -857,7 +864,7 @@ class ProtvistaUniprotStructure extends LitElement {
                           name=${this.colorSchemeGroupId}
                           value="alphamissense"
                           @click=${this.toggleColorTheme}
-                          .checked=${this.colorTheme === 'alphamissense'}
+                          .checked=${this.displayedColorTheme === 'alphamissense'}
                           ?disabled=${!this.alphamissenseAvailable}
                         />
                         <label
@@ -883,7 +890,7 @@ class ProtvistaUniprotStructure extends LitElement {
               ? html`<nightingale-structure
                   structure-id=${this.structureId}
                   protein-accession=${this.accession}
-                  color-theme=${this.colorTheme}
+                  color-theme=${this.displayedColorTheme}
                 ></nightingale-structure>`
               : nothing
           }
