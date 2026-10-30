@@ -230,6 +230,17 @@ describe('classifyTrackOutcomes', () => {
     expect(absences).toEqual([]);
   });
 
+  it('still reports absences for the reloaded tracks', () => {
+    const { errors, absences } = classify({
+      rows: [row('g', [track('a'), track('b')])],
+      trackUrls: { 'g-a': ['u1'], 'g-b': ['u2'] },
+      fetchErrors: [http('u1', 404), http('u2', 404)],
+      only: new Set(['g-a']),
+    });
+    expect(errors.size).toBe(0);
+    expect(absences.map((a) => a.key)).toEqual(['g-a']);
+  });
+
   it('keeps config order across groups', () => {
     const { errors, absences } = classify({
       rows: [row('g1', [track('a'), track('b')]), row('g2', [track('c')])],
