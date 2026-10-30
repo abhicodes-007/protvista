@@ -65,6 +65,29 @@ branch, so a reader who spots a mistake can propose a fix in a couple of
 clicks. The adapter reference and the feature type and shape vocabulary pages
 have no link, because they are generated from code.
 
+### Added: point the viewer's own requests somewhere other than EBI
+
+The sequence entry and the 3D structure panel's UniProtKB, AlphaFold DB and
+3D-Beacons lookups were fixed EBI URLs, so a page using a mirror still sent
+them to EBI. A config's `sources:` can now replace each one, with the keys
+`sequenceEntry`, `structureUniprot`, `structureAlphafold` and
+`structureBeacons`, and their `{tokens}` are filled like any data URL's. A
+page using `<protvista-uniprot-structure>` on its own sets the `uniprot-url`,
+`alphafold-url` and `beacons-url` attributes instead, and
+`beacons-checksum-url` for its 3D-Beacons lookup by `checksum` (default
+`https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5`).
+When a `data-*` value on `<protvista-uniprot>` that one of these URLs uses
+changes, the URL is requested again, as a data URL is. Set nothing and the
+viewer makes the same requests as before.
+
+### Fixed: the 3D structure panel's skipped requests and response links
+
+The structure panel used to request the page it was on for each lookup it
+skipped, such as the two that a search by `checksum` doesn't make. It now
+requests nothing for them. It also renders a link from a structure response
+only when that link is `http`, `https` or `mailto`, so a server that a URL
+override points at can't add a `javascript:` link.
+
 ### Fixed: AlphaMissense tracks tolerate imperfect annotation files
 
 One malformed line in an AlphaMissense annotations CSV made the heatmap track

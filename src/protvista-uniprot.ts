@@ -57,6 +57,7 @@ import { loadConfigWithSource, type LoadedConfig } from './schema/load.js';
 import {
   mergeVariables,
   referencedTokens,
+  substituteTemplate,
   type Variables,
 } from './schema/variables.js';
 import { type Registry, createRegistry } from './schema/registry.js';
@@ -364,16 +365,23 @@ type EntryResult =
   | {
       entry?: undefined;
       error: {
-        kind: FetchErrorKind;
+        /**
+         * `variable`: a `{token}` in the entry URL had no usable value, so
+         * nothing was requested.
+         */
+        kind: FetchErrorKind | 'variable';
         status?: number;
         /** The thrown value, for the reporter's console line. */
         cause?: unknown;
       };
     };
 
-/** The Proteins API entry `loadEntry` reads the sequence from. */
-const entryUrl = (accession: string): string =>
-  `https://www.ebi.ac.uk/proteins/api/proteins/${accession}`;
+/**
+ * The Proteins API entry `loadEntry` reads the sequence from, unless the
+ * config's `sources.sequenceEntry` names another.
+ */
+const DEFAULT_ENTRY_URL =
+  'https://www.ebi.ac.uk/proteins/api/proteins/{accession}';
 
 /**
  * The protein key for a `sequence:` config, which has no accession: what the
@@ -741,6 +749,14 @@ class ProtvistaUniprot extends LitElement {
    * `data-accession` shadowed by the named attribute costs nothing.
    */
   private _lastLoadVariables?: string;
+
+  /**
+   * What the most recent `_init()` resolved the sequence entry URL to (see
+   * `_entryUrlKey`). A `data-*` change re-runs `_init()` when this differs,
+   * so a `sources.sequenceEntry` token the page sets late, or changes, is
+   * requested like a track URL's.
+   */
+  private _lastEntryUrl?: string;
 
   /**
    * Mount-level error state. When set, `render()` shows the alert panel
@@ -1984,10 +2000,30 @@ class ProtvistaUniprot extends LitElement {
    */
   private _onVariablesChanged(): void {
     if (!this.config || this.suspend || !this._proteinKey) return;
+    // The sequence entry's URL changed: reload the whole mount, as a Retry
+    // does — a panel for the old URL is cleared first.
+    if (this._entryUrlKey() !== this._lastEntryUrl) {
+      if (this._mountError?.phase === 'sequence') this._retryMount();
+      else this._init();
+      return;
+    }
+    // The structure panel's URLs are filled in `render()`, and the panel
+    // requests them again when they change.
+    this.requestUpdate();
     if (this._variablesKey(this._variables()) === this._lastLoadVariables) {
       return;
     }
     this._loadData();
+  }
+
+  /**
+   * The sequence entry URL as `_init()` would resolve it now, comparable
+   * with `_lastEntryUrl`. `undefined` when `_init()` requests no entry (a
+   * `sequence:` config, or no accession).
+   */
+  private _entryUrlKey(): string | undefined {
+    if (this.config?.sequence || !this.accession) return undefined;
+    return JSON.stringify(this._entryUrl(this.accession));
   }
 
   /**
@@ -2826,6 +2862,7 @@ class ProtvistaUniprot extends LitElement {
     // it clears `_sequencePending`, so an accession → sequence `setConfig()`
     // mid-fetch would otherwise leave the spinner up for good. The generation
     // bump above also keeps that late result from overwriting this sequence.
+    this._lastEntryUrl = this._entryUrlKey();
     const resolved = this.config?.sequence;
     if (resolved) {
       this._sequencePending = false;
@@ -3438,10 +3475,12 @@ class ProtvistaUniprot extends LitElement {
    * the failure's classification. *Broken* (network / HTTP 5xx / parse) is
    * a transient service failure — the accession may be valid, so offer a
    * Retry. *Missing* (HTTP 4xx, or a 2xx body with no `sequence`) means the
-   * entry doesn't exist — point the user at the identifier, no Retry.
+   * entry doesn't exist — point the user at the identifier, no Retry. A
+   * `variable` failure requested nothing: the config's entry URL needs a
+   * value the page doesn't set, which the console line names.
    */
   private _reportSequenceFailure(error?: {
-    kind: FetchErrorKind;
+    kind: FetchErrorKind | 'variable';
     status?: number;
     cause?: unknown;
   }): void {
@@ -3452,7 +3491,14 @@ class ProtvistaUniprot extends LitElement {
         (error.kind === 'http' && (error.status ?? 0) >= 500));
     const panelSummary = broken
       ? `Couldn't load '${this.accession}' — the UniProt data service is unreachable or failing. This is usually temporary.`
-      : `No UniProt entry found for '${this.accession}'. Check that the accession is correct.`;
+      : error?.kind === 'variable'
+        ? `Couldn't load '${this.accession}' — the address of its sequence needs a value this page doesn't set.`
+        : `No UniProt entry found for '${this.accession}'. Check that the accession is correct.`;
+    // Where the sequence was asked for, when the fetch itself failed. A 2xx
+    // body with no sequence (`error` absent) fetched fine, and a `variable`
+    // failure asked nowhere.
+    const entry = this._entryUrl(this.accession);
+    const url = error && 'url' in entry ? entry.url : undefined;
     this._report(
       {
         severity: 'error',
@@ -3460,17 +3506,17 @@ class ProtvistaUniprot extends LitElement {
         scope: 'viewer',
         consoleLevel: 'warn',
         message: `[protvista-uniprot] loadEntry returned no usable sequence for '${this.accession}'. Rendering empty-state.`,
-        // Where the sequence was asked for, when the fetch itself failed. A
-        // 2xx body with no sequence (`error` absent) fetched fine.
-        ...(error ? { source: entryUrl(this.accession) } : {}),
+        ...(url !== undefined ? { source: url } : {}),
         recoverable: broken,
       },
       {
         panelSummary,
         context: {
           accession: this.accession,
-          ...(error ? { url: entryUrl(this.accession) } : {}),
-          ...(error?.kind ? { errorKind: error.kind } : {}),
+          ...(url !== undefined ? { url } : {}),
+          ...(error?.kind && error.kind !== 'variable'
+            ? { errorKind: error.kind }
+            : {}),
           ...(error?.status !== undefined ? { status: error.status } : {}),
         },
         // The classified cause, which `loadEntry` no longer logs itself.
@@ -4078,9 +4124,13 @@ class ProtvistaUniprot extends LitElement {
     // site here, and it routes one line through `_report` carrying `cause` —
     // two console lines for one failure was just this method reporting
     // something it had already delegated.
+    const url = this._entryUrl(accession);
+    if ('reason' in url) {
+      return { error: { kind: 'variable', cause: new Error(url.reason) } };
+    }
     let response: Response;
     try {
-      response = await fetch(entryUrl(accession));
+      response = await fetch(url.url);
     } catch (e) {
       return { error: { kind: 'network', cause: e } };
     }
@@ -4092,6 +4142,51 @@ class ProtvistaUniprot extends LitElement {
     } catch (e) {
       return { error: { kind: 'parse', cause: e } };
     }
+  }
+
+  /**
+   * The URL `loadEntry` requests for `accession`: the config's
+   * `sources.sequenceEntry` with its `{tokens}` filled like any data URL's,
+   * or else the Proteins API entry. When a token has no usable value, the
+   * template and the reason nothing can be requested.
+   */
+  private _entryUrl(
+    accession: string
+  ): { url: string } | { template: string; reason: string } {
+    const template = this.config?.sources?.sequenceEntry;
+    // The default puts the accession in as written, exactly as it always
+    // has: an accession outside `ACCESSION_PATTERN` still names its entry.
+    if (template === undefined) {
+      return { url: DEFAULT_ENTRY_URL.replace('{accession}', () => accession) };
+    }
+    const vars = this._variables();
+    vars.accession = accession;
+    const result = substituteTemplate(template, vars);
+    if ('url' in result) return result;
+    const braced = (tokens: string[]) => tokens.map((t) => `{${t}}`).join(', ');
+    return {
+      template,
+      reason:
+        `Not fetching '${template}' for the sequence: ` +
+        ('unresolved' in result
+          ? `undefined variable(s) ${braced(result.unresolved)}. ` +
+            `Define them in top-level 'variables:' or as data-* attributes.`
+          : `invalid value for ${braced(result.invalid)} ` +
+            `('.', '..' and malformed Unicode are refused).`),
+    };
+  }
+
+  /**
+   * The URL the config's `sources[key]` hands the structure panel, its
+   * `{tokens}` filled from this element's variables. `undefined` when the
+   * config sets none, so the panel keeps its own default. A template that
+   * doesn't resolve is passed on as written, and the panel reports it.
+   */
+  private _structureUrl(key: string): string | undefined {
+    const template = this.config?.sources?.[key];
+    if (template === undefined) return undefined;
+    const result = substituteTemplate(template, this._variables());
+    return 'url' in result ? result.url : template;
   }
 
   /**
@@ -5215,6 +5310,15 @@ class ProtvistaUniprot extends LitElement {
             ? html`
                 <protvista-uniprot-structure
                   accession="${this.accession || ''}"
+                  uniprot-url=${ifDefined(
+                    this._structureUrl('structureUniprot')
+                  )}
+                  alphafold-url=${ifDefined(
+                    this._structureUrl('structureAlphafold')
+                  )}
+                  beacons-url=${ifDefined(
+                    this._structureUrl('structureBeacons')
+                  )}
                 ></protvista-uniprot-structure>
               `
             : ''

@@ -80,6 +80,38 @@ sources:
   variation: https://www.ebi.ac.uk/proteins/api/variation/{accession}
 ```
 
+#### The viewer's own requests
+
+Besides track data, the viewer makes a few requests of its own: the entry it
+reads the sequence from, and the three lookups behind the 3D structure panel.
+Each goes to EBI unless your `sources` has a key of the same name, for example
+to point the viewer at a mirror:
+
+| Key | What it fetches | Default |
+| --- | --- | --- |
+| `sequenceEntry` | The entry the sequence is read from. It must answer with [Proteins API](https://www.ebi.ac.uk/proteins/api/doc/) entry JSON. | `https://www.ebi.ac.uk/proteins/api/proteins/{accession}` |
+| `structureUniprot` | The UniProtKB entry the structure panel reads PDB structures from. | `https://rest.uniprot.org/uniprotkb/{accession}` |
+| `structureAlphafold` | The AlphaFold DB predictions the structure panel lists. | `https://alphafold.ebi.ac.uk/api/prediction/{accession}?include_complexes=true` |
+| `structureBeacons` | The [3D-Beacons](https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/) summary the structure panel lists models from. | `https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/uniprot/summary/{accession}.json?exclude_provider=pdbe` |
+
+```yaml
+sources:
+  sequenceEntry: https://proteins.mirror.example.org/api/proteins/{accession}
+```
+
+Their `{tokens}` are filled like any data URL's, from the
+[variables](#variables) below. A replacement must answer with the same JSON as
+the default it replaces. A [`sequence:`](#sequence) config makes none of these
+requests.
+
+A page that uses `<protvista-uniprot-structure>` on its own sets these as the
+`uniprot-url`, `alphafold-url` and `beacons-url` attributes instead (see
+[Embed the viewer](/protvista/embed)). Given a `checksum` in place of an
+accession, that element makes a single 3D-Beacons lookup by sequence MD5, which
+its `beacons-checksum-url` attribute replaces. Its default is
+`https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5`,
+with `{checksum}` filled in.
+
 ### `variables`
 
 Baseline values for other `{tokens}` in your data URLs. The page can override

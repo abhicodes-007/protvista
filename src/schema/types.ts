@@ -192,8 +192,18 @@ export interface ProtvistaViewerConfig {
    * key via `DataSourceDescriptor.source` (preferred) or implicitly
    * via a bare string `data:` value. URLs support `{token}` template
    * variables — see `variables`.
+   *
+   * Four keys also override the viewer's own requests, each keeping its
+   * EBI default when unset: `sequenceEntry` (the Proteins API entry the
+   * sequence is read from) and, for the 3D structure panel,
+   * `structureUniprot`, `structureAlphafold` and `structureBeacons`.
    */
-  sources?: Record<string, string>;
+  sources?: Record<string, string> & {
+    sequenceEntry?: string;
+    structureUniprot?: string;
+    structureAlphafold?: string;
+    structureBeacons?: string;
+  };
 
   /**
    * Baseline values for `{token}` template variables in data URLs —

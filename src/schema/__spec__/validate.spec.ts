@@ -1716,6 +1716,21 @@ describe('validateConfig — missing-variable', () => {
     });
   });
 
+  it('covers a source no track names, such as sequenceEntry', () => {
+    const result = validateConfig(
+      withSource('https://x.example.org/features/{accession}', {
+        sources: {
+          features: 'https://x.example.org/features/{accession}',
+          sequenceEntry: 'https://x.example.org/{species}/{accession}',
+        },
+      }),
+      freshRegistry()
+    );
+    expect(missing(result.issues).map((i) => i.path)).toEqual([
+      '/sources/sequenceEntry',
+    ]);
+  });
+
   it('names the kebab-case attribute for a camelCase token', () => {
     // HTML lowercases attribute names, so `data-datasetId` would reach
     // `dataset` as `datasetid`; only `data-dataset-id` supplies `{datasetId}`.
