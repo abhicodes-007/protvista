@@ -4,6 +4,15 @@
 
 - Added `uniprot-isoforms-json` adapter and "APP isoforms" community view. The adapter is opt-in and makes no new requests unless named in a config.
 
+### Fixed: every variants track uses the variant colours
+
+With more than one `kind: variants` track, for example your own CSV of
+variants beside the UniProt Variants track, only the first got the variant
+colour scheme (pathogenic, benign, predicted, uncertain); every other drew all
+its dots pink. Each variants track now uses the scheme, matching the filter
+legend. A second track with `filterUI: nightingale-filter` likewise showed an
+empty filter, and now lists the same filters as the first (#389).
+
 ### Fixed: an AlphaMissense heatmap draws in any row
 
 An `alphamissense-heatmap` track drew nothing unless its group's id was
