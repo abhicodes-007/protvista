@@ -135,6 +135,23 @@ describe('encodeLayout / decodeLayout', () => {
       hidden: { rows: {}, tracks: {} },
     });
   });
+
+  // An older or hand-written token may carry no `hidden` at all, or a null /
+  // non-object one; reading `.rows` off it would throw outside the try/catch.
+  it.each([
+    ['{"order":["A"]}', ['A']],
+    ['{"order":null,"hidden":"x"}', null],
+    ['{"order":null,"hidden":null}', null],
+  ])(
+    'treats a missing or non-object hidden in %s as no overrides, without throwing',
+    (json, order) => {
+      expect(decodeLayout(btoa(json))).toEqual({
+        order,
+        tracks: {},
+        hidden: { rows: {}, tracks: {} },
+      });
+    }
+  );
 });
 
 // The untrusted-JSON guards `decodeLayout` is built from. The layout token
