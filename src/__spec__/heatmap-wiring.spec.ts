@@ -26,10 +26,12 @@ import { RENDERABLE_COMPONENTS } from '../built-in-components.js';
 import { loadComponent } from '../utils/index.js';
 import { CSS_PREFIX } from '../styles/css-prefix.js';
 import { createRegistry } from '../schema/registry.js';
+import type { Registry } from '../schema/registry.js';
 import { loadConfig } from '../schema/load.js';
 import { normalizeConfig } from '../schema/normalize.js';
+import { validateConfig } from '../schema/validate.js';
 import type { NormalizedConfig } from '../schema/normalize.js';
-import type { ProtvistaViewerConfig } from '../schema/types.js';
+import type { ColorStop, ProtvistaViewerConfig } from '../schema/types.js';
 
 type HeatmapStub = HTMLElement & {
   heatmapCalls: Array<{
@@ -164,8 +166,13 @@ describe('heatmap wiring follows the track, not the group id', () => {
 
     const first = heatmap(el, 'G1-hm');
     const second = heatmap(el, 'G2-hm');
+    // Both are fed, not only the last heatmap in the viewer (`every` alone
+    // holds for a heatmap that got no call at all).
+    expect(first.heatmapCalls.length).toBeGreaterThan(0);
+    expect(second.heatmapCalls.length).toBeGreaterThan(0);
     expect(first.heatmapCalls.every((c) => c.data === one)).toBe(true);
     expect(second.heatmapCalls.every((c) => c.data === two)).toBe(true);
+    expect(lastCall(first)?.yDomain).toEqual(['A']);
     expect(lastCall(second)?.yDomain).toEqual(['W', 'Y']);
 
     const ids = [first, second].map((h) => h.getAttribute('heatmap-id'));
@@ -302,5 +309,310 @@ describe('heatmap colours come from the track colorScale', () => {
     await vi.waitFor(() => expect(hm.colorFn).toBeDefined());
     expect(hm.colorFn!({ score: 0.75 })).toBe('rgb(229, 147, 116)');
     expect(hm.colorFn!({ score: 0.9 })).toBe('rgb(201, 75, 66)');
+  });
+});
+
+describe('heatmap-id is unique per track and a valid selector', () => {
+  /** The heatmap-id of each per-track heatmap (not the group aggregates). */
+  const heatmapIds = (config: ProtvistaViewerConfig): string[] => {
+    const normalized = normalize(config);
+    const el = document.createElement('protvista-uniprot') as unknown as El;
+    el.config = normalized;
+    el.sequence = SEQUENCE;
+    el.loading = false;
+    el.hasData = true;
+    el.openGroups = normalized.rows.map((r) => r.id);
+    el.displayCoordinates = { start: 1, end: SEQUENCE.length };
+    const data: Record<string, unknown> = {};
+    for (const row of normalized.rows) {
+      data[row.id] = [{ type: 'DOMAIN', start: 1, end: 2 }];
+      for (const t of row.tracks) data[`${row.id}-${t.id}`] = cells(['A'], 0.5);
+    }
+    el.data = data;
+    render(el.render(), el);
+    return normalized.rows.flatMap((row) =>
+      row.tracks.map((t) => {
+        const hm = [
+          ...el.querySelectorAll('nightingale-sequence-heatmap'),
+        ].find((h) => h.id === `${CSS_PREFIX}-track-${row.id}-${t.id}`);
+        expect(hm, `heatmap for ${row.id}-${t.id}`).toBeDefined();
+        return hm!.getAttribute('heatmap-id') ?? '';
+      })
+    );
+  };
+
+  const expectDistinctSelectors = (ids: string[]) => {
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      // heatmap-component looks its div up with `d3.select('#' + id)`.
+      expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(() => document.querySelector(`#${id}`)).not.toThrow();
+    }
+  };
+
+  it('keeps track ids that differ only in a replaced character apart', () => {
+    expectDistinctSelectors(
+      heatmapIds({
+        rows: [
+          { id: 'G', tracks: [heatmapTrack('am.v1'), heatmapTrack('am_v1')] },
+        ],
+      })
+    );
+  });
+
+  it('keeps non-ASCII track ids apart', () => {
+    expectDistinctSelectors(
+      heatmapIds({
+        rows: [
+          { id: 'G', tracks: [heatmapTrack('hm-α'), heatmapTrack('hm-β')] },
+        ],
+      })
+    );
+  });
+
+  it('keeps row ids that differ only in a replaced character apart', () => {
+    expectDistinctSelectors(
+      heatmapIds({
+        rows: [
+          { id: 'G.1', tracks: [heatmapTrack('hm')] },
+          { id: 'G_1', tracks: [heatmapTrack('hm')] },
+        ],
+      })
+    );
+  });
+
+  it('gives an id with a colon or a space a usable selector', () => {
+    expectDistinctSelectors(
+      heatmapIds({
+        rows: [
+          { id: 'AM v1', tracks: [heatmapTrack('a:b'), heatmapTrack('a b')] },
+        ],
+      })
+    );
+  });
+});
+
+describe('a heatmap matched by component alone', () => {
+  const rawHeatmap = (id: string, rendering?: Record<string, unknown>) => ({
+    id,
+    component: 'nightingale-sequence-heatmap' as const,
+    data: 'https://example.org/am.json',
+    ...(rendering ? { rendering } : {}),
+  });
+
+  it('is wired in a custom group and keeps the component colouring', async () => {
+    const config = normalize({
+      rows: [{ id: 'G', tracks: [featureTrack('f'), rawHeatmap('hm')] }],
+    });
+    expect(config.rows[0].tracks[1].kind).not.toBe('alphamissense-heatmap');
+    const hmData = cells(['A', 'C'], 0.4);
+    const features = [{ type: 'DOMAIN', start: 1, end: 2 }];
+    const el = await mount(config, {
+      G: features,
+      'G-f': features,
+      'G-hm': hmData,
+    });
+    const hm = heatmap(el, 'G-hm');
+
+    expect(hm.heatmapCalls.length).toBeGreaterThan(0);
+    expect(lastCall(hm)).toEqual({
+      xDomain: [1, 2, 3, 4],
+      yDomain: ['A', 'C'],
+      data: hmData,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    // No colorScale: the component's own colouring stays.
+    expect(hm.colorFn).toBeUndefined();
+    expect(el._trackErrors.has('G-hm')).toBe(false);
+  });
+
+  it('is wired in a standalone row', async () => {
+    const config = normalize({ rows: [rawHeatmap('hm')] });
+    const row = config.rows[0];
+    const key = `${row.id}-${row.tracks[0].id}`;
+    const hmData = cells(['A'], 0.1);
+    const el = await mount(config, { [key]: hmData }, []);
+    const hm = heatmap(el, key);
+
+    expect(hm.heatmapCalls.length).toBeGreaterThan(0);
+    expect(lastCall(hm)?.data).toBe(hmData);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hm.colorFn).toBeUndefined();
+  });
+
+  it('is coloured from its own colorScale', async () => {
+    const config = normalize({
+      rows: [
+        {
+          id: 'X',
+          tracks: [
+            rawHeatmap('hm', { colorScale: { theme: 'alphamissense-ramp' } }),
+          ],
+        },
+      ],
+    });
+    const el = await mount(config, { 'X-hm': cells(['A'], 0.5) });
+    const hm = heatmap(el, 'X-hm');
+    await vi.waitFor(() => expect(hm.colorFn).toBeDefined());
+    expect(hm.colorFn!({ score: 0.5 })).toBe('rgb(230, 219, 212)');
+  });
+});
+
+describe('an alphamissense-heatmap whose component is overridden', () => {
+  for (const component of [
+    'nightingale-track-canvas',
+    'nightingale-colored-sequence',
+  ] as const) {
+    it(`to ${component} takes its data through .data with no render error`, async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const config = normalize({
+        rows: [
+          {
+            id: 'G',
+            tracks: [featureTrack('f'), { ...heatmapTrack('hm'), component }],
+          },
+        ],
+      });
+      const track = config.rows[0].tracks[1];
+      expect(track.kind).toBe('alphamissense-heatmap');
+      expect(track.component).toBe(component);
+      const payload = [{ xValue: 1, yValue: 'A', score: 0.5 }];
+      const features = [{ type: 'DOMAIN', start: 1, end: 2 }];
+      const el = await mount(config, {
+        G: features,
+        'G-f': features,
+        'G-hm': payload,
+      });
+
+      const element = el.querySelector(`#${CSS_PREFIX}-track-G-hm`) as
+        (HTMLElement & { data?: unknown }) | null;
+      expect(element?.tagName.toLowerCase()).toBe(component);
+      expect(element?.data).toBe(payload);
+      expect(el._trackErrors.has('G-hm')).toBe(false);
+    });
+  }
+});
+
+describe('a theme registered through element.registerTheme()', () => {
+  it('colours a heatmap', async () => {
+    const el = document.createElement('protvista-uniprot') as unknown as El & {
+      registry: Registry;
+      registerTheme(name: string, stops: ColorStop[]): void;
+    };
+    el.registerTheme('mine', [
+      { value: 0, color: '#ff0000' },
+      { value: 1, color: '#0000ff' },
+    ]);
+    const config = normalizeConfig(
+      {
+        rows: [
+          {
+            ...heatmapTrack('hm'),
+            rendering: { colorScale: { theme: 'mine' } },
+          },
+        ],
+      },
+      { registry: el.registry }
+    );
+    const row = config.rows[0];
+    const key = `${row.id}-${row.tracks[0].id}`;
+    el.config = config;
+    el.sequence = SEQUENCE;
+    el.loading = false;
+    el.hasData = true;
+    el.openGroups = [];
+    el.displayCoordinates = { start: 1, end: SEQUENCE.length };
+    el.data = { [key]: cells(['A'], 0.5) };
+    render(el.render(), el);
+    await el._loadDataInComponents();
+    const hm = heatmap(el, key);
+
+    expect(hm.heatmapCalls.length).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(hm.colorFn).toBeDefined());
+    expect(hm.colorFn!({ score: 0.5 })).toBe('rgb(128, 0, 128)');
+  });
+});
+
+describe('a grouped heatmap is drawn once per walk', () => {
+  it('calls setHeatmapData and setColor once, though two loops hand it over', async () => {
+    const config = normalize({
+      rows: [{ id: 'G', tracks: [featureTrack('f'), heatmapTrack('hm')] }],
+    });
+    const features = [{ type: 'DOMAIN', start: 1, end: 2 }];
+    // The loader's key order (load-data.ts): each track's key, then the
+    // group aggregate. The walk reaches `G-hm` by its own key first (a new
+    // payload), then again from group G's track loop.
+    const data: Record<string, unknown> = {};
+    data['G-f'] = features;
+    data['G-hm'] = cells(['A', 'C'], 0.9);
+    data['G'] = features;
+
+    const el = document.createElement('protvista-uniprot') as unknown as El;
+    el.config = config;
+    el.sequence = SEQUENCE;
+    el.loading = false;
+    el.hasData = true;
+    el.openGroups = ['G'];
+    el.displayCoordinates = { start: 1, end: SEQUENCE.length };
+    el.data = data;
+    render(el.render(), el);
+    const hm = heatmap(el, 'G-hm') as HeatmapStub & {
+      heatmapInstance: { setColor: (fn: unknown) => void };
+    };
+    const setColor = vi.spyOn(hm.heatmapInstance, 'setColor');
+
+    await el._loadDataInComponents();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hm.heatmapCalls).toHaveLength(1);
+    expect(setColor).toHaveBeenCalledTimes(1);
+
+    // A later walk (an expand, a layout edit) draws it again, as before.
+    await el._loadDataInComponents();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hm.heatmapCalls).toHaveLength(2);
+    expect(setColor).toHaveBeenCalledTimes(2);
+
+    // New data is drawn once too.
+    const next = cells(['W'], 0.1);
+    el.data = { ...el.data, 'G-hm': next };
+    await el._loadDataInComponents();
+    expect(hm.heatmapCalls).toHaveLength(3);
+    expect(lastCall(hm)?.data).toBe(next);
+  });
+});
+
+describe("a group colorScale that only the group's heatmap aggregate could read", () => {
+  it('is not drawn, and the validator warns about it', async () => {
+    const raw: ProtvistaViewerConfig = {
+      rows: [
+        {
+          id: 'G',
+          rendering: {
+            colorScale: {
+              stops: [
+                { value: 0, color: '#000000' },
+                { value: 1, color: '#ffffff' },
+              ],
+            },
+          },
+          tracks: [heatmapTrack('am')],
+        },
+      ],
+    };
+    expect(
+      validateConfig(raw, createRegistry())
+        .issues.filter((i) => i.code === 'rendering-field-ignored')
+        .map((i) => i.path)
+    ).toEqual(['G']);
+
+    const hmData = cells(['A'], 0.5);
+    const el = await mount(normalize(raw), { G: hmData, 'G-am': hmData }, []);
+    await new Promise((r) => setTimeout(r, 0));
+    const aggregate = el.querySelector(`#${CSS_PREFIX}-track-G`) as HeatmapStub;
+    expect(aggregate.tagName.toLowerCase()).toBe(
+      'nightingale-sequence-heatmap'
+    );
+    expect(aggregate.heatmapCalls).toEqual([]);
+    expect(aggregate.colorFn).toBeUndefined();
   });
 });

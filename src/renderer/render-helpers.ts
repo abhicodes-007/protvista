@@ -24,6 +24,7 @@ import type {
   ColorStop,
   RenderingOptions,
 } from '../schema/types.js';
+import { interpolateRgba, parseCssColor } from './css-color.js';
 
 /**
  * Canonical theme → legacy `(scale, colorRange)` strings.
@@ -77,26 +78,6 @@ export function colorScaleToAttrs(
   return {};
 }
 
-/** `#rgb` / `#rrggbb` → channels; anything else is not interpolable here. */
-function parseHex(color: string): [number, number, number] | undefined {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
-  if (!m) return undefined;
-  const hex =
-    m[1].length === 3
-      ? m[1]
-          .split('')
-          .map((c) => c + c)
-          .join('')
-      : m[1];
-  return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [
-    number,
-    number,
-    number,
-  ];
-}
-
-const channel = (v: number) => Math.max(0, Math.min(255, Math.round(v) || 0));
-
 /**
  * Resolve a `ColorScaleConfig` to a value → CSS colour function, for
  * components that colour each datum themselves
@@ -110,12 +91,15 @@ const channel = (v: number) => Math.max(0, Math.min(255, Math.round(v) || 0));
  * so the component keeps its own default colouring.
  *
  * The interpolation is piecewise-linear in RGB, extrapolating past the end
- * stops and printing `rgb(r, g, b)`, exactly as the d3 `scaleLinear` the
- * heatmap used before did (`amColorScale` from nightingale-structure), so
- * the default AlphaMissense heatmap draws the same pixels. A missing or
- * non-numeric value gives `undefined`, as that scale did. Stops that are not
- * hex colours are not interpolated: each value takes the colour of the stop
- * at or below it.
+ * stops and printing `rgb(r, g, b)` (or `rgba(…)` below full opacity),
+ * exactly as the d3 `scaleLinear` the heatmap used before did (`amColorScale`
+ * from nightingale-structure), so the default AlphaMissense heatmap draws the
+ * same pixels. It reads every colour d3 reads (hex, `rgb()`, `hsl()`, named
+ * colours; see `css-color.ts`), so the same stops draw the same gradient as
+ * on a coloured sequence. A missing or non-numeric value gives `undefined`,
+ * as that scale did. A stop d3 cannot read either (a `var()`, say) is not
+ * interpolated: each value next to it takes the colour of the stop at or
+ * below it.
  */
 export function colorScaleToColorFn(
   cs: ColorScaleConfig | undefined,
@@ -137,7 +121,7 @@ export function colorScaleToColorFn(
 
   const sorted = [...stops].sort((a, b) => a.value - b.value);
   const values = sorted.map((s) => s.value);
-  const rgbs = sorted.map((s) => parseHex(s.color));
+  const rgbs = sorted.map((s) => parseCssColor(s.color));
   const last = sorted.length - 1;
   return (value: number) => {
     if (value == null || Number.isNaN(Number(value))) return undefined;
@@ -152,8 +136,7 @@ export function colorScaleToColorFn(
     if (!a || !b) return sorted[x >= values[i + 1] ? i + 1 : i].color;
     const span = values[i + 1] - values[i];
     const t = span ? (x - values[i]) / span : 0.5;
-    const [r, g, bl] = [0, 1, 2].map((c) => channel(a[c] + t * (b[c] - a[c])));
-    return `rgb(${r}, ${g}, ${bl})`;
+    return interpolateRgba(a, b, t);
   };
 }
 

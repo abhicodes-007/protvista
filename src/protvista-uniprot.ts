@@ -428,10 +428,16 @@ const showsSeriesLabel = (tracks: readonly NormalizedTrack[]): boolean =>
 /**
  * The id of the `<div>` a heatmap draws into, unique per track key.
  * `heatmap-component` finds it with `d3.select('#' + id)`, an unescaped CSS
- * selector, so characters a selector would misread become `_`.
+ * selector, so only ASCII letters, digits and `-` pass through: `_` becomes
+ * `__`, and every other character `_<hex code point>_`. No escape is a prefix
+ * of another, so the mapping is one-to-one: `am.v1` and `am_v1`, or `hm-α`
+ * and `hm-β`, get different ids, where replacing each with a bare `_` gave
+ * them the same one.
  */
 const heatmapDivId = (key: string): string =>
-  `${CSS_PREFIX}-heatmap-${key.replace(/[^\w-]/g, '_')}`;
+  `${CSS_PREFIX}-heatmap-${key.replace(/[^A-Za-z0-9-]/gu, (c) =>
+    c === '_' ? '__' : `_${c.codePointAt(0)!.toString(16)}_`
+  )}`;
 
 /** Each built-in component's height when `rendering.height` is unset. */
 const DEFAULT_TRACK_HEIGHT: Record<string, number> = {
@@ -775,6 +781,16 @@ class ProtvistaUniprot extends LitElement {
    * `_collectTrackErrors`). `status` is present only for `http`.
    */
   private _trackErrors: Map<string, TrackFetchError> = new Map();
+
+  /**
+   * The payload each heatmap has drawn during the push walk now running
+   * (`_loadDataInComponents`), or `null` outside one. A grouped heatmap is
+   * handed its data twice in one walk (by its own key, then by its group's
+   * track loop), and each `setHeatmapData` / `setColor` goes over every cell,
+   * so `_setHeatmapData` draws a payload once per walk, as the wiring did
+   * before it moved into `_assignComponentData`.
+   */
+  private _heatmapsDrawnThisWalk: WeakMap<HTMLElement, unknown> | null = null;
 
   /**
    * The substituted URL(s) each track last fetched, keyed like
@@ -2378,6 +2394,8 @@ class ProtvistaUniprot extends LitElement {
         `a heatmap takes an array of { xValue, yValue, score } records, not ${typeof payload}`
       );
     }
+    // Already drawn in this walk (see `_heatmapsDrawnThisWalk`).
+    if (this._heatmapsDrawnThisWalk?.get(element) === payload) return;
     const cells = payload as Array<{ yValue?: string; score: number }>;
     const xDomain = Array.from(
       { length: this.sequence.length },
@@ -2389,6 +2407,7 @@ class ProtvistaUniprot extends LitElement {
       yDomain,
       cells as Parameters<NightingaleSequenceHeatmap['setHeatmapData']>[2]
     );
+    this._heatmapsDrawnThisWalk?.set(element, payload);
     const colorFor = colorScaleToColorFn(track.rendering.colorScale, (name) =>
       this.registry.getTheme(name)
     );
@@ -2422,53 +2441,58 @@ class ProtvistaUniprot extends LitElement {
   async _loadDataInComponents() {
     await frame();
     this._fillVariationSequence();
-    Object.entries(this.data).forEach(([id, data]) => {
-      // `__unfiltered` baselines are inert filter state, not renderable
-      // track/group payloads — skip them so this walk's "every key maps
-      // to a track or group" invariant holds.
-      if (id.endsWith(UNFILTERED_SUFFIX)) return;
-      const element = this.findById<NightingaleTrackCanvas>(
-        `${CSS_PREFIX}-track-${id}`
-      );
-      // set data if it hasn't changed
-      if (element && element.data !== data) {
-        this._assignComponentData(element, data, id);
-      }
-      const currentGroup = this.config?.rows.find((c) => c.id === id);
-      if (
-        currentGroup &&
-        // Reveal the group when it shows something: its collapsed view, or
-        // any visible track. Not the collapsed view alone — it leaves out
-        // hidden and `detailOnly` tracks, so a group whose only feeding
-        // track is hidden still shows its visible `detailOnly` track.
-        // `hasRenderableData` owns the shape rules (including the
-        // `{ sequence, variants }` bundle).
-        (hasRenderableData(data) ||
-          visibleTracks(currentGroup).some((t) =>
-            hasRenderableData(this.data[trackKey(currentGroup.id, t.id)])
-          ))
-      ) {
-        // Make group element visible
-        const groupElt = this.findById<HTMLElement>(
-          `${CSS_PREFIX}-group_${currentGroup.id}`
+    this._heatmapsDrawnThisWalk = new WeakMap();
+    try {
+      Object.entries(this.data).forEach(([id, data]) => {
+        // `__unfiltered` baselines are inert filter state, not renderable
+        // track/group payloads — skip them so this walk's "every key maps
+        // to a track or group" invariant holds.
+        if (id.endsWith(UNFILTERED_SUFFIX)) return;
+        const element = this.findById<NightingaleTrackCanvas>(
+          `${CSS_PREFIX}-track-${id}`
         );
-        if (groupElt) {
-          groupElt.style.display = 'flex';
+        // set data if it hasn't changed
+        if (element && element.data !== data) {
+          this._assignComponentData(element, data, id);
         }
-        for (const track of currentGroup.tracks) {
-          const elementTrack = this.findById<NightingaleTrackCanvas>(
-            `${CSS_PREFIX}-track-${id}-${track.id}`
+        const currentGroup = this.config?.rows.find((c) => c.id === id);
+        if (
+          currentGroup &&
+          // Reveal the group when it shows something: its collapsed view, or
+          // any visible track. Not the collapsed view alone — it leaves out
+          // hidden and `detailOnly` tracks, so a group whose only feeding
+          // track is hidden still shows its visible `detailOnly` track.
+          // `hasRenderableData` owns the shape rules (including the
+          // `{ sequence, variants }` bundle).
+          (hasRenderableData(data) ||
+            visibleTracks(currentGroup).some((t) =>
+              hasRenderableData(this.data[trackKey(currentGroup.id, t.id)])
+            ))
+        ) {
+          // Make group element visible
+          const groupElt = this.findById<HTMLElement>(
+            `${CSS_PREFIX}-group_${currentGroup.id}`
           );
-          if (elementTrack) {
-            this._assignComponentData(
-              elementTrack,
-              this.data[`${id}-${track.id}`],
-              `${id}-${track.id}`
+          if (groupElt) {
+            groupElt.style.display = 'flex';
+          }
+          for (const track of currentGroup.tracks) {
+            const elementTrack = this.findById<NightingaleTrackCanvas>(
+              `${CSS_PREFIX}-track-${id}-${track.id}`
             );
+            if (elementTrack) {
+              this._assignComponentData(
+                elementTrack,
+                this.data[`${id}-${track.id}`],
+                `${id}-${track.id}`
+              );
+            }
           }
         }
-      }
-    });
+      });
+    } finally {
+      this._heatmapsDrawnThisWalk = null;
+    }
 
     // Groups are `display: none` by default (see protvista-styles.ts) and
     // revealed imperatively above only when they have data. A group that

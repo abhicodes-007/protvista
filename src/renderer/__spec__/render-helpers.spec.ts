@@ -156,15 +156,90 @@ describe('colorScaleToColorFn', () => {
     expect(fn(5)).toBe('rgb(128, 0, 128)');
   });
 
-  it('steps between stops it cannot interpolate', () => {
+  // ColorStop.color takes any CSS colour, and the coloured sequence hands the
+  // same stops to a d3 scaleLinear, which interpolates all of these. Each
+  // expected value is what `scaleLinear().domain([0, 1]).range([lo, hi])`
+  // returns.
+  const nonHex: Array<[string, string, string, Array<[number, string]>]> = [
+    [
+      'named',
+      'blue',
+      'red',
+      [
+        [0.5, 'rgb(128, 0, 128)'],
+        [0.25, 'rgb(64, 0, 191)'],
+        [-1, 'rgb(0, 0, 255)'],
+        [2, 'rgb(255, 0, 0)'],
+      ],
+    ],
+    ['black / white', 'black', 'white', [[0.5, 'rgb(128, 128, 128)']]],
+    ['rgb()', 'rgb(0, 0, 255)', 'rgb(255, 0, 0)', [[0.5, 'rgb(128, 0, 128)']]],
+    ['#rrggbbaa', '#0000ffff', '#ff0000ff', [[0.5, 'rgb(128, 0, 128)']]],
+    [
+      'rgba() below full opacity',
+      'rgba(0, 0, 255, 0.5)',
+      'rgba(255, 0, 0, 1)',
+      [[0.5, 'rgba(128, 0, 128, 0.75)']],
+    ],
+    [
+      'rgb() percentages',
+      'rgb(0%, 0%, 100%)',
+      'rgb(100%, 0%, 0%)',
+      [[0.5, 'rgb(128, 0, 128)']],
+    ],
+    [
+      'hsl()',
+      'hsl(240, 100%, 50%)',
+      'hsl(0, 100%, 50%)',
+      [[0.5, 'rgb(128, 0, 128)']],
+    ],
+    [
+      'transparent',
+      'transparent',
+      'red',
+      [
+        [0.5, 'rgba(255, 0, 0, 0.5)'],
+        [1, 'rgb(255, 0, 0)'],
+      ],
+    ],
+    [
+      '#rgba',
+      '#00f8',
+      '#f00f',
+      [[0.5, 'rgba(128, 0, 128, 0.7666666666666666)']],
+    ],
+    [
+      'hsla() to a named colour, extrapolated',
+      'hsla(120, 50%, 25%, 0.3)',
+      'goldenrod',
+      [
+        [0, 'rgba(32, 96, 32, 0.3)'],
+        [0.3, 'rgba(88, 116, 32, 0.51)'],
+        [1.7, 'rgb(255, 214, 32)'],
+      ],
+    ],
+  ];
+  for (const [label, lo, hi, expected] of nonHex) {
+    it(`interpolates ${label} stops as d3 scaleLinear does`, () => {
+      const fn = colorScaleToColorFn({
+        stops: [
+          { value: 0, color: lo },
+          { value: 1, color: hi },
+        ],
+      })!;
+      for (const [score, color] of expected) expect(fn(score)).toBe(color);
+    });
+  }
+
+  it('steps between stops no CSS colour parser can read', () => {
     const fn = colorScaleToColorFn({
       stops: [
-        { value: 0, color: 'red' },
+        { value: 0, color: 'var(--low)' },
         { value: 1, color: 'blue' },
       ],
     })!;
-    expect(fn(-1)).toBe('red');
-    expect(fn(0.5)).toBe('red');
+    expect(fn(-1)).toBe('var(--low)');
+    expect(fn(0.5)).toBe('var(--low)');
     expect(fn(1)).toBe('blue');
   });
 });

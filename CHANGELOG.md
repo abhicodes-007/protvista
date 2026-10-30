@@ -11,7 +11,8 @@ An `alphamissense-heatmap` track drew nothing unless its group's id was
 of its own, stayed blank. With two heatmaps, the first was handed every
 heatmap's data. Each heatmap track now gets its own data, in any group or
 standalone row, coloured by its `colorScale`: the `alphamissense-ramp` unless
-the config sets another. A heatmap whose data is not an array of cells gets a
+the config sets another. Its stops take any colour a coloured sequence takes
+(hex, `rgb()`, `hsl()` or a colour name) and blend the same way. A heatmap whose data is not an array of cells gets a
 `⚠` badge and a `protvista-error` event instead of stopping the other tracks
 from drawing. The default UniProt view looks the same as before.
 
