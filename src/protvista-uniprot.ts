@@ -2504,16 +2504,49 @@ class ProtvistaUniprot extends LitElement {
   updated(changedProperties: Map<string, string>) {
     super.updated(changedProperties);
 
-    // Error-panel focus management. Kept at the very top so the early
-    // returns below (suspend / accession change) can't skip it. On
-    // appear, move focus into the alert panel once; on dismiss, restore
-    // it to whatever was focused when the error was reported — done here
-    // (not in the close handler) so the panel is already gone from the
-    // DOM this cycle, avoiding focus landing on an unmounting node
-    // (mirrors the popover controller's restore).
+    // Kept at the very top so the early returns below (suspend / accession
+    // change) can't skip it.
+    const panelClosed = this._syncPanelFocus();
+
+    this._syncLoadingAnnouncement();
+
+    this._announceNotes();
+    this._syncNotePopover();
+
+    this._markFirstRender();
+
+    // Consumed before any early return: left set past the `suspend` return
+    // below, the flag would swallow the next real accession change.
+    const changedByConfig =
+      this._configAccessionChange && changedProperties.has('accession');
+    if (changedByConfig) this._configAccessionChange = false;
+
+    if (changedProperties.has('suspend')) {
+      if (this.suspend) return;
+      this._init();
+    }
+
+    if (this._onAccessionChanged(changedProperties, changedByConfig)) return;
+
+    if (this._needsComponentPush(changedProperties, panelClosed)) {
+      this._loadDataInComponents();
+    }
+  }
+
+  /**
+   * Error-panel focus management, run first in `updated()`. On appear,
+   * move focus into the alert panel once; on dismiss, restore it to
+   * whatever was focused when the error was reported — done here (not in
+   * the close handler) so the panel is already gone from the DOM this
+   * cycle, avoiding focus landing on an unmounting node (mirrors the
+   * popover controller's restore).
+   *
+   * Returns whether the panel closed on this cycle.
+   */
+  private _syncPanelFocus(): boolean {
     const panelOpen = this._mountError !== null;
-    // Captured before `_panelWasOpen` is overwritten: the push gate below needs
-    // to know the panel closed on this cycle.
+    // Captured before `_panelWasOpen` is overwritten: the push gate in
+    // `updated()` needs to know the panel closed on this cycle.
     const panelClosed = !panelOpen && this._panelWasOpen;
     if (panelOpen && !this._panelWasOpen) {
       this.querySelector<HTMLElement>(`.${CSS_PREFIX}-error-panel`)?.focus({
@@ -2526,26 +2559,31 @@ class ProtvistaUniprot extends LitElement {
       this._prevFocus = null;
     }
     this._panelWasOpen = panelOpen;
+    return panelClosed;
+  }
 
-    // Announce the wait politely. A live region only announces a *change* to
-    // its contents, so the text cannot go in with the region — it would arrive
-    // already holding it, and most screen readers would stay silent. Nor is
-    // setting it here enough on its own: `updated()` runs in the same task as
-    // the render that inserted the (empty) region, so no frame — and no
-    // accessibility-tree update — happens in between. The text therefore goes
-    // in `LIVE_REGION_SETTLE_MS` later, as an update to a region assistive
-    // technology has already seen.
-    //
-    // The `_loadAnnounced` latch is what keeps it to once per load: `updated()`
-    // runs for every reactive property, and re-announcing on each would talk
-    // over the user. Clearing on completion leaves the region empty for the
-    // layout announcements that share it, and an empty string announces
-    // nothing.
-    //
-    // It latches only while the spinner — and so the region — is actually on
-    // screen. A `suspend`ed element or one showing the alert panel renders no
-    // region, and latching then would make the text arrive *with* the region
-    // once it mounted: the silent case above, with the latch blocking a retry.
+  /**
+   * Announce the wait politely. A live region only announces a *change* to
+   * its contents, so the text cannot go in with the region — it would arrive
+   * already holding it, and most screen readers would stay silent. Nor is
+   * setting it here enough on its own: `updated()` runs in the same task as
+   * the render that inserted the (empty) region, so no frame — and no
+   * accessibility-tree update — happens in between. The text therefore goes
+   * in `LIVE_REGION_SETTLE_MS` later, as an update to a region assistive
+   * technology has already seen.
+   *
+   * The `_loadAnnounced` latch is what keeps it to once per load: `updated()`
+   * runs for every reactive property, and re-announcing on each would talk
+   * over the user. Clearing on completion leaves the region empty for the
+   * layout announcements that share it, and an empty string announces
+   * nothing.
+   *
+   * It latches only while the spinner — and so the region — is actually on
+   * screen. A `suspend`ed element or one showing the alert panel renders no
+   * region, and latching then would make the text arrive *with* the region
+   * once it mounted: the silent case above, with the latch blocking a retry.
+   */
+  private _syncLoadingAnnouncement() {
     const regionMounted = !this.suspend && this._mountError === null;
     if (this.loading && regionMounted && !this._loadAnnounced) {
       this._loadAnnounced = true;
@@ -2557,11 +2595,14 @@ class ProtvistaUniprot extends LitElement {
       clearTimeout(this._announceTimer);
       if (this._announcement === LOADING_ANNOUNCEMENT) this._announce('');
     }
+  }
 
-    this._announceNotes();
-    this._syncNotePopover();
-
-    // First render with content — manager is in the DOM, not the loader.
+  /**
+   * First render with content — manager is in the DOM, not the loader.
+   * Records the first-render performance mark and the measures derived
+   * from it.
+   */
+  private _markFirstRender() {
     if (this.hasData && !this.loading) {
       markOnce('protvista:first-render');
       measureOnce(
@@ -2575,96 +2616,98 @@ class ProtvistaUniprot extends LitElement {
         'protvista:first-render'
       );
     }
+  }
 
-    // Consumed before any early return: left set past the `suspend` return
-    // below, the flag would swallow the next real accession change.
-    const changedByConfig =
-      this._configAccessionChange && changedProperties.has('accession');
-    if (changedByConfig) this._configAccessionChange = false;
-
-    if (changedProperties.has('suspend')) {
-      if (this.suspend) return;
-      this._init();
-    }
-
-    // Post-mount `accession` change → re-run `_init()` so `loadEntry()`
-    // refetches the sequence and `_loadData()` refetches the track
-    // data against the new ID. Consumers like UniProt's own feature
-    // viewer navigate between entries without unmounting the element,
-    // so this is a live UX path.
-    //
-    // Guard: `changedProperties.get('accession') !== undefined` so the
-    // initial-mount transition (`undefined → "<value>"`) doesn't
-    // double-run — that transition is already covered by
-    // `connectedCallback() → _init()`.
-    //
-    // Intentional early return: `_init()` is async and will update
-    // `this.config` / `this.sequence` / `this.data` on its own
-    // schedule, each firing another `updated()` cycle that will hit
-    // the gate below. Running the push on THIS tick would inject
-    // stale (old-accession) data into components.
-    //
-    // `_applyConfig` replacing or dropping an accession the previous config
-    // supplied is not such a change — the `_init()` that applied the config
-    // loads for it — so its flag is consumed here and the change otherwise
-    // ignored.
-    //
-    // A sequence-mode element given an accession after mount is the other
-    // exception: `undefined → value` is ignored above, but here the config
-    // was resolved without one and must be re-resolved, which fails with
-    // `accession-and-sequence` rather than silently keeping a config never
-    // checked against the attribute.
+  /**
+   * Post-mount `accession` change → re-run `_init()` so `loadEntry()`
+   * refetches the sequence and `_loadData()` refetches the track
+   * data against the new ID. Consumers like UniProt's own feature
+   * viewer navigate between entries without unmounting the element,
+   * so this is a live UX path.
+   *
+   * Guard: `changedProperties.get('accession') !== undefined` so the
+   * initial-mount transition (`undefined → "<value>"`) doesn't
+   * double-run — that transition is already covered by
+   * `connectedCallback() → _init()`.
+   *
+   * Returns `true` when `updated()` must return early (intentionally):
+   * `_init()` is async and will update `this.config` / `this.sequence` /
+   * `this.data` on its own schedule, each firing another `updated()`
+   * cycle that will hit the push gate. Running the push on THIS tick
+   * would inject stale (old-accession) data into components.
+   *
+   * `_applyConfig` replacing or dropping an accession the previous config
+   * supplied is not such a change — the `_init()` that applied the config
+   * loads for it — so its flag (`changedByConfig`, consumed in `updated()`)
+   * makes the change otherwise ignored.
+   *
+   * A sequence-mode element given an accession after mount is the other
+   * exception: `undefined → value` is ignored above, but here the config
+   * was resolved without one and must be re-resolved, which fails with
+   * `accession-and-sequence` rather than silently keeping a config never
+   * checked against the attribute.
+   */
+  private _onAccessionChanged(
+    changedProperties: Map<string, string>,
+    changedByConfig: boolean
+  ): boolean {
     if (changedProperties.has('accession')) {
       if (changedByConfig) {
         // The config's own change: the `_init()` that applied it loads.
       } else if (changedProperties.get('accession') !== undefined) {
         this._init();
-        return;
+        return true;
       } else if (this.config?.sequence && this.accession) {
         this._dropConfig();
         this._init();
-        return;
+        return true;
       }
     }
+    return false;
+  }
 
-    // Only push data into Nightingale when something that could
-    // affect the per-track payload or the track DOM has actually
-    // changed. `updated()` fires for every reactive property —
-    // running the DOM walk on each one was wasted work and churned
-    // `element.data` setters that cost a canvas re-draw.
-    //
-    // `openGroups` must stay in the gate: when a group expands,
-    // the render cycle mounts fresh per-track elements that need to be
-    // populated on this same tick. `data` / `config` / `sequence`
-    // cover the load-pipeline re-flow. Unrelated reactive churn
-    // (`displayCoordinates`, `viewerConfig`, …) short-circuits.
-    //
-    // A layout edit swaps `config` (it rewrites `config.rows`), so it is
-    // already covered: a reorder moves Nightingale DOM nodes via the keyed
-    // `repeat` and a show re-mounts a previously-hidden row, and both need
-    // their payload (re-)pushed on the same tick, exactly like an
-    // `openGroups` expand.
-    //
-    // `_customizeMode` is in the gate for the same reason as `openGroups`:
-    // the mode wraps each row in a different template (controls, a drop gap,
-    // stubs for rows that would otherwise not render), so Lit tears down and
-    // rebuilds the row subtrees — including the Nightingale elements, which
-    // come back empty unless their payload is pushed again on this tick.
-    //
-    // `panelClosed` is the same case once more: the alert panel replaces the
-    // whole viewer, so dismissing it mounts every row afresh — hidden and
-    // empty — while none of the properties above has changed. Without it a
-    // strict-mode Dismiss "revealed" a viewer with nothing in it.
-    if (
+  /**
+   * Only push data into Nightingale when something that could
+   * affect the per-track payload or the track DOM has actually
+   * changed. `updated()` fires for every reactive property —
+   * running the DOM walk on each one was wasted work and churned
+   * `element.data` setters that cost a canvas re-draw.
+   *
+   * `openGroups` must stay in the gate: when a group expands,
+   * the render cycle mounts fresh per-track elements that need to be
+   * populated on this same tick. `data` / `config` / `sequence`
+   * cover the load-pipeline re-flow. Unrelated reactive churn
+   * (`displayCoordinates`, `viewerConfig`, …) short-circuits.
+   *
+   * A layout edit swaps `config` (it rewrites `config.rows`), so it is
+   * already covered: a reorder moves Nightingale DOM nodes via the keyed
+   * `repeat` and a show re-mounts a previously-hidden row, and both need
+   * their payload (re-)pushed on the same tick, exactly like an
+   * `openGroups` expand.
+   *
+   * `_customizeMode` is in the gate for the same reason as `openGroups`:
+   * the mode wraps each row in a different template (controls, a drop gap,
+   * stubs for rows that would otherwise not render), so Lit tears down and
+   * rebuilds the row subtrees — including the Nightingale elements, which
+   * come back empty unless their payload is pushed again on this tick.
+   *
+   * `panelClosed` is the same case once more: the alert panel replaces the
+   * whole viewer, so dismissing it mounts every row afresh — hidden and
+   * empty — while none of the properties above has changed. Without it a
+   * strict-mode Dismiss "revealed" a viewer with nothing in it.
+   */
+  private _needsComponentPush(
+    changedProperties: Map<string, string>,
+    panelClosed: boolean
+  ): boolean {
+    return (
       changedProperties.has('data') ||
       changedProperties.has('config') ||
       changedProperties.has('sequence') ||
       changedProperties.has('openGroups') ||
       changedProperties.has('_customizeMode') ||
       panelClosed
-    ) {
-      this._loadDataInComponents();
-    }
+    );
   }
 
   /**
