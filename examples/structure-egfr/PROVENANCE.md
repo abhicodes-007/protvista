@@ -9,14 +9,14 @@ It visualizes co-crystal drug binding contacts for 7 clinically approved tyrosin
 | `drug-contacts.csv` | Co-crystal ligand binding contacts across solved PDB entries mapped to canonical UniProt coordinates. |
 | `config.yaml` | Standalone ProtVista community viewer configuration with 5 curated groups. |
 | `preset.json` | Community view registration metadata (`label`, `description`, `length: 1210`). |
-| `provenance.json` | Machine-readable provenance record with checksums, source releases, and citations. |
+| `provenance.json` | Machine-readable provenance record with checksums, the UniProtKB release, retrieval times, and citations. |
 | `PROVENANCE.md` | Attribution, mapping methodology, and source citations. |
 
 ## Sources & Attribution
 
 | Resource | Description | Source / Release | Licence |
 | --- | --- | --- | --- |
-| **PDBe Knowledge Base (PDBe-KB)** | Residue-level ligand binding site interactions for human EGFR | `graph-api/uniprot/ligand_sites/P00533` (PDBe-KB 2026.1) | CC0 1.0 Universal |
+| **PDBe Knowledge Base (PDBe-KB)** | Residue-level ligand binding site interactions for human EGFR | `graph-api/uniprot/ligand_sites/P00533`, retrieved 2026-10-29 (the graph API publishes no release number; `provenance.json` records the retrieval time and the output's sha256) | CC0 1.0 Universal |
 | **UniProtKB** | Canonical human EGFR sequence (`P00533`), domain boundaries, catalytic sites | UniProtKB release 2026_03 | CC BY 4.0 |
 | **AlphaFold DB** | Per-residue pLDDT confidence scores for AF-P00533-F1 | Fetched dynamically at render time | CC BY 4.0 |
 

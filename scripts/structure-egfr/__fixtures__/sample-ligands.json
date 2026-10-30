@@ -31,5 +31,52 @@
         "allPDBEntries": ["4g5j", "4g5p", "4i24", "5d41", "6duk", "7k1i"]
       }
     ]
+  },
+  {
+    "name": "GEFITINIB",
+    "accession": "IRE",
+    "residues": [
+      {
+        "startIndex": 800,
+        "endIndex": 800,
+        "startCode": "ASP",
+        "endCode": "ASP",
+        "indexType": "UNIPROT",
+        "interactingPDBEntries": [
+          { "pdbId": "4wkq", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "2itz", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "4i22", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "2ito", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "3ug2", "entityId": 1, "chainIds": "A" },
+          { "pdbId": "4i22", "entityId": 1, "chainIds": "B" }
+        ],
+        "allPDBEntries": ["2ito", "2itz", "3ug2", "4i22", "4wkq"]
+      },
+      {
+        "startIndex": 718,
+        "endIndex": 718,
+        "startCode": "LEU",
+        "endCode": "LEU",
+        "indexType": "UNIPROT",
+        "interactingPDBEntries": [
+          { "pdbId": "2ito", "entityId": 1, "chainIds": "A" }
+        ],
+        "allPDBEntries": ["2ito", "2itz", "3ug2", "4i22", "4wkq"]
+      }
+    ]
+  },
+  {
+    "name": "LAPATINIB",
+    "accession": "FMM",
+    "residues": [
+      {
+        "startIndex": 1002,
+        "endIndex": 1002,
+        "startCode": "MET",
+        "endCode": "MET",
+        "indexType": "UNIPROT",
+        "allPDBEntries": ["1xkk"]
+      }
+    ]
   }
 ]

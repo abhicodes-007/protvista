@@ -8,7 +8,7 @@
     "url": "https://rest.uniprot.org/uniprotkb/P00533.json?fields=sequence,ft_binding,ft_act_site",
     "uniprotRelease": "2026_03",
     "uniprotReleaseDate": "02-September-2026",
-    "retrieved": "2026-10-19T16:00:54.000Z",
+    "retrieved": "2026-10-29T16:05:55.000Z",
     "length": 1210,
     "sequenceSha256": "dbb4583267ad40a7dfd854ee3c44ce4be38e137d0570e3eb76cf1854a74e7246",
     "licence": "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); attribution: The UniProt Consortium, UniProtKB"
@@ -16,8 +16,7 @@
   "source": {
     "name": "PDBe-KB (Protein Data Bank in Europe - Knowledge Base)",
     "url": "https://www.ebi.ac.uk/pdbe/graph-api/uniprot/ligand_sites/P00533",
-    "release": "2026.1",
-    "retrieved": "2026-10-19T16:00:55.000Z",
+    "retrieved": "2026-10-29T16:05:56.000Z",
     "licence": "CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)"
   },
   "mapping": {
@@ -36,7 +35,7 @@
       "type": "AMP_PNP",
       "name": "AMP-PNP (ATP analogue)",
       "ccd": "ANP",
-      "residues": 20
+      "residues": 21
     },
     {
       "type": "DACOMITINIB",
@@ -76,13 +75,13 @@
     }
   ],
   "result": {
-    "totalFeatures": 159,
-    "uniquePositions": 43,
+    "totalFeatures": 160,
+    "uniquePositions": 44,
     "first": 718,
     "last": 1002
   },
   "outputs": {
-    "drug-contacts.csv": "4c94ff74c7871dc7ce3192f48e2233b3dafc16a299ab8a2208b26f37e0d436f3"
+    "drug-contacts.csv": "9d529b1cc142685c48317f6b82dcf372e41d55fd89dac3eb1e38500faf5520b8"
   },
   "citations": [
     "Varadi M et al. PDBe-KB: a community-driven resource for structural and functional annotations. Protein Sci 2022;31(10):e4439. doi:10.1002/pro.4439",
