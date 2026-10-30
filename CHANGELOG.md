@@ -4,6 +4,14 @@
 
 - Added `uniprot-isoforms-json` adapter and "APP isoforms" community view. The adapter is opt-in and makes no new requests unless named in a config.
 
+### Fixed: the variant and RNA-editing count graphs count the last residue
+
+The line graphs from `uniprot-variation-counts-json` and
+`uniprot-rna-editing-counts-json` dropped any variant or RNA-editing event on
+the protein's last residue, and plotted a spurious point at position 0. Both now
+plot exactly positions 1 to the sequence length, ignore positions outside that
+range, and no longer cap a residue's count at 255.
+
 ### Fixed: `rendering.height` and `rendering.layout` take effect
 
 The config schema accepted `rendering.height` and `rendering.layout`, but the
