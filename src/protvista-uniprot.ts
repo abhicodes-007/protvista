@@ -46,7 +46,7 @@ import type {
   ProtvistaTrackOrigin,
 } from './events.js';
 
-import filterConfig, { colorConfig } from './filter-config.js';
+import filterConfig from './filter-config.js';
 
 // Schema-driven config pipeline. The default YAML is
 // bundled as a raw string so `js-yaml` stays lazy-loaded — adopters
@@ -76,6 +76,11 @@ import {
   colorScaleToColorFn,
   renderingToAttrs,
 } from './renderer/render-helpers.js';
+import {
+  DEFAULT_TRACK_HEIGHT,
+  trackTemplate,
+  type TrackOptions,
+} from './renderer/track-template.js';
 import {
   aggregatePayload,
   drawnAggregateTracks,
@@ -409,29 +414,6 @@ const hasRenderableData = (value: unknown): boolean => {
  */
 const showsSeriesLabel = (tracks: readonly NormalizedTrack[]): boolean =>
   !tracks.some((t) => t.data?.some((d) => isAuthoredSource(d)));
-
-/**
- * The id of the `<div>` a heatmap draws into, unique per track key.
- * `heatmap-component` finds it with `d3.select('#' + id)`, an unescaped CSS
- * selector, so only ASCII letters, digits and `-` pass through: `_` becomes
- * `__`, and every other character `_<hex code point>_`. No escape is a prefix
- * of another, so the mapping is one-to-one: `am.v1` and `am_v1`, or `hm-α`
- * and `hm-β`, get different ids, where replacing each with a bare `_` gave
- * them the same one.
- */
-const heatmapDivId = (key: string): string =>
-  `${CSS_PREFIX}-heatmap-${key.replace(/[^A-Za-z0-9-]/gu, (c) =>
-    c === '_' ? '__' : `_${c.codePointAt(0)!.toString(16)}_`
-  )}`;
-
-/** Each built-in component's height when `rendering.height` is unset. */
-const DEFAULT_TRACK_HEIGHT: Record<string, number> = {
-  'nightingale-track-canvas': 40,
-  'nightingale-variation-canvas': 500,
-  'nightingale-linegraph-track': 50,
-  'nightingale-colored-sequence': 13,
-  'nightingale-sequence-heatmap': 300,
-};
 
 /**
  * The `path` a runtime track warning's issue names the track by: the bare
@@ -4089,17 +4071,12 @@ class ProtvistaUniprot extends LitElement {
                 }"
                 data-id="${CSS_PREFIX}-track_${track.id}"
               >
-                ${this.getTrack(
-                  track.component,
-                  attrs.layout ?? 'non-overlapping',
-                  attrs.color,
-                  attrs.shape,
-                  key,
-                  attrs.scale,
-                  attrs.colorRange,
-                  showsSeriesLabel([track]),
-                  attrs.height
-                )}
+                ${this.getTrack(track.component, {
+                  ...attrs,
+                  layout: attrs.layout ?? 'non-overlapping',
+                  id: key,
+                  showSeriesLabel: showsSeriesLabel([track]),
+                })}
               </div>`
             : ''
         }
@@ -4294,23 +4271,18 @@ class ProtvistaUniprot extends LitElement {
         >
           ${
             groupHasData
-              ? this.getTrack(
-                  group.component,
-                  groupAttrs.layout ?? 'non-overlapping',
-                  groupAttrs.color,
-                  groupAttrs.shape,
-                  group.id,
-                  groupAttrs.scale,
-                  groupAttrs.colorRange,
+              ? this.getTrack(group.component, {
+                  ...groupAttrs,
+                  layout: groupAttrs.layout ?? 'non-overlapping',
+                  id: group.id,
                   // Keyed off the track the aggregate actually draws: a graph
                   // group's payload is its first drawn track
                   // (`drawnAggregateTracks` — not `detailOnly`, not hidden, in
                   // the current order), not merely the first visible one.
-                  showsSeriesLabel(
+                  showSeriesLabel: showsSeriesLabel(
                     drawnAggregateTracks(group.tracks).slice(0, 1)
                   ),
-                  groupAttrs.height
-                )
+                })
               : ''
           }
         </div>
@@ -4437,17 +4409,12 @@ class ProtvistaUniprot extends LitElement {
                 }"
                 data-id="${CSS_PREFIX}-track_${track.id}"
               >
-                ${this.getTrack(
-                  track.component,
-                  attrs.layout ?? 'non-overlapping',
-                  attrs.color,
-                  attrs.shape,
-                  key,
-                  attrs.scale,
-                  attrs.colorRange,
-                  showsSeriesLabel([track]),
-                  attrs.height
-                )}
+                ${this.getTrack(track.component, {
+                  ...attrs,
+                  layout: attrs.layout ?? 'non-overlapping',
+                  id: key,
+                  showSeriesLabel: showsSeriesLabel([track]),
+                })}
               </div>`
             : ''
         }
@@ -6082,106 +6049,21 @@ class ProtvistaUniprot extends LitElement {
     `;
   }
 
-  getTrack(
-    component: KnownComponentName | string,
-    layout = '',
-    color = '',
-    shape = '',
-    id = '',
-    scale = '',
-    colorRange = '',
-    showSeriesLabel = true,
-    height = ''
-  ) {
-    // lit-html doesn't allow to have dynamic tag names, hence the switch/case
-    // with repeated code. `height` is the track's `rendering.height`; each
-    // component keeps its own default when it is unset.
-    switch (component) {
-      case 'nightingale-track-canvas':
-        return html`
-          <nightingale-track-canvas
-            length="${this.sequence?.length}"
-            height="${height || DEFAULT_TRACK_HEIGHT[component]}"
-            layout="${layout}"
-            color="${color}"
-            shape="${shape}"
-            display-start="${this.displayCoordinates?.start}"
-            display-end="${this.displayCoordinates?.end}"
-            id="${CSS_PREFIX}-track-${id}"
-            highlight-event="onclick"
-            use-ctrl-to-zoom
-          >
-          </nightingale-track-canvas>
-        `;
-      case 'nightingale-variation-canvas':
-        return html`
-          <nightingale-variation-canvas
-            length="${this.sequence?.length}"
-            height="${height || DEFAULT_TRACK_HEIGHT[component]}"
-            display-start="${this.displayCoordinates?.start}"
-            display-end="${this.displayCoordinates?.end}"
-            id="${CSS_PREFIX}-track-${id}"
-            .colorConfig=${colorConfig}
-            highlight-event="onclick"
-            use-ctrl-to-zoom
-          >
-          </nightingale-variation-canvas>
-        `;
-      case 'nightingale-linegraph-track':
-        return html`
-          <nightingale-linegraph-track
-            length="${this.sequence?.length}"
-            height="${height || DEFAULT_TRACK_HEIGHT[component]}"
-            display-start="${this.displayCoordinates?.start}"
-            display-end="${this.displayCoordinates?.end}"
-            id="${CSS_PREFIX}-track-${id}"
-            ?show-label-name="${showSeriesLabel}"
-            highlight-on-click
-            use-ctrl-to-zoom
-          >
-          </nightingale-linegraph-track>
-        `;
-      case 'nightingale-colored-sequence':
-        return html`
-          <nightingale-colored-sequence
-            length="${this.sequence?.length}"
-            display-start="${this.displayCoordinates?.start}"
-            display-end="${this.displayCoordinates?.end}"
-            id="${CSS_PREFIX}-track-${id}"
-            scale="${scale}"
-            color-range="${colorRange}"
-            height="${height || DEFAULT_TRACK_HEIGHT[component]}"
-            highlight-event="onclick"
-            use-ctrl-to-zoom
-          >
-          </nightingale-colored-sequence>
-        `;
-
-      case 'nightingale-sequence-heatmap':
-        return html`
-          <nightingale-sequence-heatmap
-            id="${CSS_PREFIX}-track-${id}"
-            heatmap-id="${heatmapDivId(id)}"
-            length="${this.sequence?.length}"
-            display-start="${this.displayCoordinates?.start}"
-            display-end="${this.displayCoordinates?.end}"
-            highlight-event="onclick"
-            highlight-color="#EB3BFF66"
-            height="${height || DEFAULT_TRACK_HEIGHT[component]}"
-            use-ctrl-to-zoom
-          >
-          </nightingale-sequence-heatmap>
-        `;
-      default:
-        // Reached when a component is registered and validated but has no
-        // `case` here — the current gap for consumer components (see
-        // "Register + load + render" in docs/architecture.md). Draw nothing,
-        // and say nothing from here: `registerConfigComponents` has already
-        // reported it once for the whole config, through the router. A report
-        // from inside `render()` could only reach the console anyway, and
-        // would repeat on every pass.
-        break;
-    }
+  /**
+   * The `<nightingale-*>` element for one track, drawn over the current
+   * sequence and display window; `undefined` for a component with no
+   * renderer (see `trackTemplate`).
+   */
+  getTrack(component: KnownComponentName | string, options: TrackOptions = {}) {
+    return trackTemplate(
+      component,
+      {
+        length: this.sequence?.length,
+        displayStart: this.displayCoordinates?.start,
+        displayEnd: this.displayCoordinates?.end,
+      },
+      options
+    );
   }
 }
 
