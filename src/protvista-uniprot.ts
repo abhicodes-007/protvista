@@ -316,8 +316,10 @@ const recordFetchFailure = (
  * on the source kind, which only the correlation pass can see. So the whole
  * decision — including the console line — moves there, behind the routing
  * table.
+ *
+ * Exported for its unit tests only; `index.ts` does not re-export it.
  */
-const makeRecordingFetch =
+export const makeRecordingFetch =
   (signal: AbortSignal, errors: Map<string, UrlFetchError>) =>
   async (url: string, responseType: 'text' | 'json'): Promise<unknown> => {
     let response: Response;
