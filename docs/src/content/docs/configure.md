@@ -1,5 +1,6 @@
 ---
 title: Author a config
+description: "Write the short YAML or JSON file that tells the viewer which tracks to show, and where their data comes from."
 ---
 
 A **config** is a small document that describes what the viewer should show: the
@@ -79,6 +80,38 @@ sources:
   variation: https://www.ebi.ac.uk/proteins/api/variation/{accession}
 ```
 
+#### The viewer's own requests
+
+Besides track data, the viewer makes a few requests of its own: the entry it
+reads the sequence from, and the three lookups behind the 3D structure panel.
+Each goes to EBI unless your `sources` has a key of the same name, for example
+to point the viewer at a mirror:
+
+| Key | What it fetches | Default |
+| --- | --- | --- |
+| `sequenceEntry` | The entry the sequence is read from. It must answer with [Proteins API](https://www.ebi.ac.uk/proteins/api/doc/) entry JSON. | `https://www.ebi.ac.uk/proteins/api/proteins/{accession}` |
+| `structureUniprot` | The UniProtKB entry the structure panel reads PDB structures from. | `https://rest.uniprot.org/uniprotkb/{accession}` |
+| `structureAlphafold` | The AlphaFold DB predictions the structure panel lists. | `https://alphafold.ebi.ac.uk/api/prediction/{accession}?include_complexes=true` |
+| `structureBeacons` | The [3D-Beacons](https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/) summary the structure panel lists models from. | `https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/uniprot/summary/{accession}.json?exclude_provider=pdbe` |
+
+```yaml
+sources:
+  sequenceEntry: https://proteins.mirror.example.org/api/proteins/{accession}
+```
+
+Their `{tokens}` are filled like any data URL's, from the
+[variables](#variables) below. A replacement must answer with the same JSON as
+the default it replaces. A [`sequence:`](#sequence) config makes none of these
+requests.
+
+A page that uses `<protvista-uniprot-structure>` on its own sets these as the
+`uniprot-url`, `alphafold-url` and `beacons-url` attributes instead (see
+[Embed the viewer](/protvista/embed)). Given a `checksum` in place of an
+accession, that element makes a single 3D-Beacons lookup by sequence MD5, which
+its `beacons-checksum-url` attribute replaces. Its default is
+`https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5`,
+with `{checksum}` filled in.
+
 ### `variables`
 
 Baseline values for other `{tokens}` in your data URLs. The page can override
@@ -147,7 +180,7 @@ Each track needs an `id` and a `kind`, and a `data` source. Common fields:
 | `filter` | Keep only records of one `type` (e.g. `DOMAIN`). A convenience shortcut. |
 | `label` | Human-readable track title. Supports rich inline text. |
 | `description` | Longer text shown alongside the track. |
-| `rendering` | Visual overrides — `color`, `shape`, `height`, `layout`, `colorScale`. Applies to every feature the track draws; see [Feature type and shape vocabulary](/protvista/type-and-shape-vocabulary) for the valid `shape` values and what a feature's `type` gets by default. |
+| `rendering` | Visual settings — `color`, `shape`, `height`, `layout`, `colorScale`. See [`rendering`](#rendering). |
 | `hidden` | `true` ships the track hidden: a visitor can reveal it from **Customize**. Also valid on a group. See [Customize the layout](/protvista/customize-layout#authoring-a-row-or-track-hidden-hidden). |
 
 ### `kind`
@@ -169,6 +202,47 @@ Points a track at its data. It can be:
 - **inline** — the records written directly in the config.
 
 The [Load your own data](/protvista/your-data) guide covers each in detail.
+
+### `rendering`
+
+How a track looks. Set it on a track, on a group (its tracks inherit it), or
+under `defaults:` for every track. Each field is resolved separately, and the
+first of these that sets it wins: the track, its `kind`, its group, then
+`defaults:`.
+
+The `kind` step matters for `colorScale`: `alphafold-confidence`,
+`alphamissense-pathogenicity` and `alphamissense-heatmap` bring their own
+ramp, which beats a group's or `defaults:` `colorScale`. A `colorScale` on
+such a group colours only the group's collapsed row; to recolour the track
+itself, set it on the track.
+
+| Field | What it does | Where it has an effect |
+| --- | --- | --- |
+| `color` | The colour of every feature the track draws. A feature's own `color` column wins. | Feature tracks |
+| `shape` | The glyph of every feature the track draws, one of the [shape names](/protvista/type-and-shape-vocabulary). A feature's own `shape` column wins. | Feature tracks |
+| `height` | The track's height in pixels. Unset, a feature track is 40 px tall, a line graph 50, a coloured sequence 13, a heatmap 300 and the variant plot 500. On a group, it also sizes the collapsed row. | Every track |
+| `layout` | `non-overlapping` (the default) gives overlapping features a row each; `default` draws them all on one row. | Feature tracks |
+| `colorScale` | A colour gradient: a `theme` (`alphafold-ramp`, `alphamissense-ramp`) or explicit `stops`. | Coloured-sequence tracks (`alphafold-confidence`, `alphamissense-pathogenicity`) and heatmaps (`alphamissense-heatmap`) |
+
+The rows of a `non-overlapping` track share its height, so ten overlapping
+features (isoforms, say) get thin rows at the default 40 px. Give them room:
+
+```yaml
+  - id: isoforms
+    label: Isoforms
+    kind: features
+    data: ./isoforms.csv
+    rendering:
+      height: 120
+```
+
+`height` under `defaults:` sizes every track, whatever its kind.
+
+`color`, `shape`, `layout` or `colorScale` on a track that can't use it does
+nothing, and the validator says so with a `rendering-field-ignored` warning.
+In particular, a feature track has no colour scale: to colour features by
+score, give each one a `color` column ([Style and annotate each feature from
+your file](/protvista/your-data#style-and-annotate-each-feature-from-your-file)).
 
 ## Editor autocomplete
 

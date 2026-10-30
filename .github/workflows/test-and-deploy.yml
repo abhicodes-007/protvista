@@ -111,9 +111,10 @@ jobs:
 
       # Builds the Astro + Starlight docs (incl. the playground page) + the bench
       # page into site/. Requires astro, @astrojs/starlight, astro-mermaid,
-      # mermaid and sharp in devDependencies.
+      # mermaid and sharp in devDependencies. Runs on every push and pull
+      # request, so a broken docs link or #anchor (starlight-links-validator)
+      # fails CI before merge; only `next` uploads and deploys.
       - name: Build site
-        if: github.ref == 'refs/heads/next' && github.event_name == 'push'
         run: pnpm site:build
 
       - name: Upload Pages artifact

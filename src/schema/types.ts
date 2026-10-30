@@ -192,8 +192,18 @@ export interface ProtvistaViewerConfig {
    * key via `DataSourceDescriptor.source` (preferred) or implicitly
    * via a bare string `data:` value. URLs support `{token}` template
    * variables — see `variables`.
+   *
+   * Four keys also override the viewer's own requests, each keeping its
+   * EBI default when unset: `sequenceEntry` (the Proteins API entry the
+   * sequence is read from) and, for the 3D structure panel,
+   * `structureUniprot`, `structureAlphafold` and `structureBeacons`.
    */
-  sources?: Record<string, string>;
+  sources?: Record<string, string> & {
+    sequenceEntry?: string;
+    structureUniprot?: string;
+    structureAlphafold?: string;
+    structureBeacons?: string;
+  };
 
   /**
    * Baseline values for `{token}` template variables in data URLs —
@@ -371,7 +381,7 @@ export interface GroupConfig {
    * This is not an initial-mount-only default: `setRowVisibility` and the
    * show/hide control write this very field, so a user's choice and an
    * author's are the same state, and `getConfig()` exports whichever is
-   * current (see `specs/config-approach.md`). Defaults to `false`.
+   * current. Defaults to `false`.
    */
   hidden?: boolean;
 
@@ -535,8 +545,8 @@ export interface TrackConfig {
    *
    * As with `GroupConfig.hidden`, this is the same field
    * `setTrackVisibility` and the show/hide control write — a user's choice
-   * and an author's are the same state (see `specs/config-approach.md`).
-   * Defaults to `false`.
+   * and an author's are the same state, and `getConfig()` exports whichever
+   * is current. Defaults to `false`.
    */
   hidden?: boolean;
 
@@ -645,14 +655,25 @@ export interface RenderingOptions {
   /** Shape of feature glyphs (e.g. `"rectangle"`, `"circle"`, `"diamond"`). */
   shape?: string;
 
-  /** Height of the track in pixels. */
+  /**
+   * Height of the track in pixels. Unset, each component keeps its own
+   * default: 40 for feature tracks, 50 for line graphs, 13 for coloured
+   * sequences, 300 for heatmaps and 500 for variants.
+   */
   height?: number;
 
-  /** Layout mode. Defaults to `"non-overlapping"`. */
+  /**
+   * How a feature track places overlapping features: `"non-overlapping"`
+   * (the default) stacks them in rows; `"default"` draws them all on one
+   * row. Only `nightingale-track-canvas` lays features out — on any other
+   * component the validator warns that it has no effect.
+   */
   layout?: 'non-overlapping' | 'default';
 
   /**
-   * Continuous colour scale for colored-sequence and heatmap tracks.
+   * Continuous colour scale for colored-sequence tracks, the only
+   * component that reads it; anywhere else the validator warns that it
+   * has no effect.
    *
    * Maps numeric values to colours via a gradient with named stops.
    * If omitted, the Nightingale component's built-in default is used.
@@ -802,7 +823,8 @@ export type KnownAdapterName =
   | 'interpro-entries-json'
   | 'alphafold-prediction-json'
   | 'alphamissense-average-csv'
-  | 'alphamissense-full-csv';
+  | 'alphamissense-full-csv'
+  | 'uniprot-isoforms-json';
 
 /**
  * How a source's bytes are encoded — *not* what its records mean, which the
@@ -922,6 +944,11 @@ export interface ProtvistaRuntimeAPI {
    * gets its tag defined automatically when the config references it,
    * with no consumer `customElements.define()` call. The name must not
    * collide with a built-in renderable component.
+   *
+   * Limitation: the component is defined and validated but not yet
+   * drawn. Its track renders empty and an `unrendered-component`
+   * warning is reported. A new renderer has to be added inside
+   * ProtVista (`RENDERABLE_COMPONENTS` plus a `getTrack()` case).
    */
   registerComponent(name: string, ctor: CustomElementConstructor): void;
 
@@ -1024,8 +1051,9 @@ export interface SemanticKindDefinition {
    * `format:`, inline records, `setTrackData()` — for free.
    *
    * Omit it for a kind that can only read its provider's feed, and name the
-   * kind for that provider so authors are not invited to try (see the naming
-   * rule in `specs/config-approach.md`).
+   * kind for that provider (`alphafold-confidence`, not `confidence-score`) so
+   * authors are not invited to try: a plain domain word (`features`,
+   * `variants`) promises that an author's own file works on the kind.
    */
   shape?: ShapeName;
   /**

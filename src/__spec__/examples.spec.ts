@@ -39,7 +39,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
-import { readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +87,43 @@ const EXAMPLES_ROOT = resolve(
 );
 const REPO_ROOT = resolve(EXAMPLES_ROOT, '..');
 
+// A community view states its protein's length in its own `preset.json`, so
+// adding one edits no list here. A preset.json may add a length but never
+// change a known one: that would hide out-of-range data in other examples.
+const LENGTH_CONFLICTS: string[] = [];
+const LENGTH_SOURCES: Record<string, string> = {};
+for (const entry of readdirSync(EXAMPLES_ROOT, { withFileTypes: true })) {
+  const manifest = join(EXAMPLES_ROOT, entry.name, 'preset.json');
+  const config = join(EXAMPLES_ROOT, entry.name, 'config.yaml');
+  if (!entry.isDirectory() || !existsSync(manifest) || !existsSync(config))
+    continue;
+  let length: unknown;
+  try {
+    ({ length } = JSON.parse(readFileSync(manifest, 'utf8')) ?? {});
+  } catch {
+    continue; // presets.spec.ts names the broken preset.json
+  }
+  const accession = /^accession:\s*["']?([A-Za-z0-9_-]+)/m.exec(
+    readFileSync(config, 'utf8')
+  )?.[1];
+  if (!accession || typeof length !== 'number') continue;
+  const here = `examples/${entry.name}/preset.json`;
+  const known = PROTEIN_LENGTHS[accession];
+  if (known === undefined) {
+    PROTEIN_LENGTHS[accession] = length;
+    LENGTH_SOURCES[accession] = here;
+  } else if (known !== length) {
+    LENGTH_CONFLICTS.push(
+      `${here}: length ${length}, but ${accession} is ${known} residues ` +
+        `(${LENGTH_SOURCES[accession] ?? 'PROTEIN_LENGTHS'})`
+    );
+  }
+}
+
+it('community views agree on the length of each protein', () => {
+  expect(LENGTH_CONFLICTS).toEqual([]);
+});
+
 interface DiscoveredExample {
   name: string;
   dir: string;
@@ -127,7 +164,8 @@ it('discovers the expected example directories', () => {
       'sequence-only',
       'sequence-inline',
       'small-peptide',
-      'conservation',
+      'conservation', 
+      'isoforms-app'
     ])
   );
 });
@@ -144,7 +182,9 @@ it('discovers the expected example directories', () => {
  * `filter: DOMAIN`, so the track survives the filter pass too.
  */
 const CANNED_FEATURES_RESPONSE = {
-  features: [{ type: 'DOMAIN', begin: 1, end: 770, description: 'Fixture domain' }],
+  features: [
+    { type: 'DOMAIN', begin: 1, end: 770, description: 'Fixture domain' },
+  ],
 };
 
 /**
@@ -160,7 +200,31 @@ function resolveLocalRef(exampleDir: string, ref: string): string {
   return ref.startsWith('/') ? join(REPO_ROOT, ref) : resolve(exampleDir, ref);
 }
 
+const SAVED_ENTRIES_DIR = join(REPO_ROOT, 'src/__fixtures__/isoforms');
+const SAVED_ENTRY_FIELDS = ['accession', 'sequence', 'ft_var_seq', 'cc_alternative_products'];
+const REQUIRED_ENTRY_FIELDS = SAVED_ENTRY_FIELDS.filter((field) => field !== 'accession');
+const UNIPROTKB_ENTRY_URL = /^https:\/\/rest\.uniprot\.org\/uniprotkb\/([A-Z0-9-]+)\.json(?:\?|$)/;
+
+function savedUniprotEntry(url: string, problems: string[]): string | undefined {
+  const accession = UNIPROTKB_ENTRY_URL.exec(url)?.[1];
+  if (!accession) return undefined;
+  const path = join(SAVED_ENTRIES_DIR, `${accession}.json`);
+  if (!existsSync(path)) return undefined;
+  const fields = new URL(url).searchParams.get('fields')?.split(',') ?? [];
+  const unknown = fields.filter((f) => !SAVED_ENTRY_FIELDS.includes(f));
+  const missing = REQUIRED_ENTRY_FIELDS.filter((f) => !fields.includes(f));
+  if (unknown.length > 0 || missing.length > 0) {
+    problems.push(
+      `${url}: ask for fields=${REQUIRED_ENTRY_FIELDS.join(',')}` +
+        (unknown.length > 0 ? `; not saved: ${unknown.join(', ')}` : '') +
+        (missing.length > 0 ? `; missing: ${missing.join(', ')}` : '')
+    );
+  }
+  return path;
+}
+
 function makeExampleFetchers(exampleDir: string) {
+  const fieldProblems: string[] = [];
   const extendsFetcher = async (ref: string): Promise<string> =>
     readFile(resolveLocalRef(exampleDir, ref), 'utf8');
   // A `sequence:` FASTA file resolves exactly like an `extends:` target.
@@ -170,6 +234,13 @@ function makeExampleFetchers(exampleDir: string) {
     url: string,
     responseType: 'json' | 'text'
   ): Promise<unknown> => {
+    // NEW: Use the savedUniprotEntry helper
+    const saved = savedUniprotEntry(url, fieldProblems);
+    if (saved) {
+      const text = await readFile(saved, 'utf8');
+      return responseType === 'json' ? JSON.parse(text) : text;
+    }
+    
     if (/^https?:\/\//i.test(url)) {
       return responseType === 'json' ? CANNED_FEATURES_RESPONSE : '';
     }
@@ -177,7 +248,7 @@ function makeExampleFetchers(exampleDir: string) {
     return responseType === 'json' ? JSON.parse(text) : text;
   };
 
-  return { extendsFetcher, sequenceFetcher, fetchOne };
+  return { extendsFetcher, sequenceFetcher, fetchOne, fieldProblems };
 }
 
 function buildInstance(overrides: Record<string, unknown>) {
@@ -205,8 +276,13 @@ function buildInstance(overrides: Record<string, unknown>) {
  */
 function findLocalTracks(
   config: NormalizedConfig
-): { groupId: string; trackId: string; key: string }[] {
-  const found: { groupId: string; trackId: string; key: string }[] = [];
+): { groupId: string; trackId: string; key: string; hidden: boolean }[] {
+  const found: {
+    groupId: string;
+    trackId: string;
+    key: string;
+    hidden: boolean;
+  }[] = [];
   for (const group of config.rows) {
     for (const track of group.tracks) {
       const from = track.data[0]?.from;
@@ -215,6 +291,7 @@ function findLocalTracks(
           groupId: group.id,
           trackId: track.id,
           key: `${group.id}-${track.id}`,
+          hidden: !!(group.hidden || track.hidden),
         });
       }
     }
@@ -225,11 +302,15 @@ function findLocalTracks(
 describe.each(discoverExamples())('example: $name', ({ dir, configPath }) => {
   let config: NormalizedConfig;
   let result: Awaited<ReturnType<typeof loadProtvistaData>>;
+  let urlProblems: string[];
 
   beforeAll(async () => {
     const text = await readFile(configPath, 'utf8');
-    const { extendsFetcher, sequenceFetcher, fetchOne } =
+    
+    const { extendsFetcher, sequenceFetcher, fetchOne, fieldProblems } =
       makeExampleFetchers(dir);
+    urlProblems = fieldProblems;
+
     // A `sequence:` example shows its own protein: an accession beside it is
     // an error, so it gets none.
     const parsed = (await parseConfigText(text)) as { sequence?: unknown };
@@ -250,10 +331,16 @@ describe.each(discoverExamples())('example: $name', ({ dir, configPath }) => {
       resolveAdapter
     );
   });
-
+  
   it('validates against the schema', () => {
     expect(config).toBeDefined();
     expect(config.rows.length).toBeGreaterThan(0);
+  });
+
+  it('asks UniProt for the fields its saved entry was fetched with', () => {
+    // A saved entry answers in place of UniProt, so a `fields=` value that
+    // UniProt would reject must fail here rather than load the saved copy.
+    expect(urlProblems).toEqual([]);
   });
 
   it('produces data through the real adapter map, including every locally-authored track', () => {
@@ -291,7 +378,8 @@ describe.each(discoverExamples())('example: $name', ({ dir, configPath }) => {
       : PROTEIN_LENGTHS[accession];
     expect(
       length,
-      `add the length of ${accession} to PROTEIN_LENGTHS`
+      `give the length of ${accession}: a community view in its ` +
+        'preset.json, any other example in PROTEIN_LENGTHS'
     ).toBeDefined();
     for (const [key, coords] of Object.entries(result.trackCoordinates)) {
       expect(findOutOfRange(coords.rows, length), key).toBeNull();
@@ -333,11 +421,16 @@ describe.each(discoverExamples())('example: $name', ({ dir, configPath }) => {
     // rendered its own row. Match on `data-id` (present on the content
     // lane of both grouped and standalone tracks; the `id=` form is
     // grouped-only).
-    for (const { trackId, key } of findLocalTracks(config)) {
+    for (const { trackId, key, hidden } of findLocalTracks(config)) {
+      // Authored `hidden: true` (row or track): drawn only in Customize mode.
+      if (hidden) continue;
       const node = target.querySelector(
         `[data-id="${CSS_PREFIX}-track_${trackId}"]`
       );
-      expect(node, `${CSS_PREFIX}-track_${trackId} (${key}) should render`).not.toBeNull();
+      expect(
+        node,
+        `${CSS_PREFIX}-track_${trackId} (${key}) should render`
+      ).not.toBeNull();
     }
   });
 });

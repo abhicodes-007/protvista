@@ -1,5 +1,6 @@
 ---
 title: Load your own data
+description: "How to load your own data into ProtVista: choose a format (CSV, TSV, JSON or BED) and give your data the shape a track needs."
 ---
 
 ProtVista isn't limited to UniProt. Most tracks can read your own annotations
@@ -528,6 +529,32 @@ file on disk, load it again to pick up the change.
 If your file doesn't match the feature-record columns — different headings, a
 bespoke format — you can register your own parser with `registerAdapter` and
 name it on the track. See [Escape hatches](/protvista/escape-hatches).
+
+## Ask an AI to write your config
+
+Give the assistant your protein accession, the tracks you want, your data
+file name and its column headers, and any tooltip or colour requirements.
+Attach the [Config authoring documentation](https://ebi-webcomponents.github.io/protvista/_llms-txt/config-authoring.txt)
+so it can read the instructions and examples directly. You can also provide
+the [documentation index](https://ebi-webcomponents.github.io/protvista/llms.txt)
+and the [config schema](https://ebi-webcomponents.github.io/protvista/schema/v1/config.schema.json).
+
+Providing the config schema does not guarantee a working config.
+For example, an AI may use an unresolved preset name such as `default`
+in `extends`, omit required fields, or reference an undeclared source.
+Provide the full Config authoring documentation alongside your request
+so the assistant has the instructions and examples available.
+Treat any AI-generated config as a draft: results vary by prompt and
+assistant, so always verify the output in the playground.
+
+Always paste the config into the [playground](https://ebi-webcomponents.github.io/protvista/playground/)
+and load your sample file with **Load data file…**. Check the listed errors
+and warnings, confirm that the requested tracks appear in the right order,
+and test any tooltips, links and visibility controls before using it on your page.
+
+## Start from your field
+
+- [Structural biology and drug discovery](/protvista/playground/#preset=community-structure-egfr) — PDBe co-crystal drug binding contacts for 7 approved TKIs on human EGFR (`P00533`), PDB 3D structure coverage, and AlphaFold confidence.
 
 ## Where to go next
 

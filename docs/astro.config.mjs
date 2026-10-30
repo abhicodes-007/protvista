@@ -1,6 +1,8 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
+import starlightLlmsTxt from 'starlight-llms-txt';
+import starlightLinksValidator from 'starlight-links-validator';
 
 // The playground page imports the framework-free component, which does
 // `import icon from './icons/x.svg'` and hands the result straight to lit's
@@ -113,6 +115,13 @@ export default defineConfig({
       title: 'ProtVista',
       description:
         'Embed an interactive protein feature viewer and load your own data — no framework required.',
+      // "Edit page" link on every page: this base + the page's path relative
+      // to docs/ (e.g. src/content/docs/tutorial.md), on `next`, the branch the
+      // site documents. Generated pages opt out with `editUrl: false`.
+      editLink: {
+        baseUrl:
+          'https://github.com/ebi-webcomponents/protvista/edit/next/docs/',
+      },
       // Keeps the splash home's three hero buttons on one row (see the file).
       customCss: ['./src/styles/hero.css'],
       // Every page states which version it documents, as a chip beside the
@@ -193,6 +202,55 @@ export default defineConfig({
             { label: 'Configuration vs data', link: '/configuration-vs-data' },
           ],
         },
+      ],
+      plugins: [
+        // Generates llms-full.txt, llms-small.txt and
+        // _llms-txt/config-authoring.txt from the pages at build time, so
+        // what an AI assistant reads can't drift from the docs.
+        starlightLlmsTxt({
+          promote: [
+            'index',
+            'tutorial',
+            'configure',
+            'your-data',
+            'track-kinds',
+          ],
+          exclude: ['blog/**', 'webinar'], // applies to llms-small.txt only
+          customSets: [
+            {
+              label: 'Config authoring',
+              description: 'everything needed to write a viewer config',
+              paths: [
+                'tutorial',
+                'configure',
+                'your-data',
+                'sequence-only',
+                'track-kinds',
+                'adapter-reference',
+                'type-and-shape-vocabulary',
+                'data-tooltip',
+                'troubleshooting',
+              ],
+            },
+          ],
+          // Drops the "Section titled …" text of heading anchor links.
+          customSelectors: { all: ['.sl-anchor-link'] },
+          // The shortened files (llms-small.txt and the custom sets) leave
+          // out tips and <details>, but keep notes: one says the config
+          // syntax is v5 only, a mistake AI assistants make.
+          minify: { note: false },
+        }),
+        // Fails the build on a broken internal link or #anchor. The excluded
+        // paths are not Starlight pages (the playground, schemas, sample data).
+        starlightLinksValidator({
+          exclude: [
+            '/protvista/playground',
+            '/protvista/playground/**',
+            '/protvista/schema/**',
+            '/protvista/sample-data/**',
+            '/protvista/default-config.yaml',
+          ],
+        }),
       ],
     }),
   ],

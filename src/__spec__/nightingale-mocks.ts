@@ -51,15 +51,35 @@ vi.mock('@nightingale-elements/nightingale-variation-canvas', () => ({
 vi.mock('@nightingale-elements/nightingale-linegraph-track', () => ({
   default: class extends HTMLElement {},
 }));
+// The heatmap takes its cells through `setHeatmapData` and its colours
+// through `heatmapInstance.setColor`, not `.data`. The stub records both, so
+// a spec can read what each heatmap was handed (`heatmapCalls`) and the
+// colour function it was given (`colorFn`).
 vi.mock('@nightingale-elements/nightingale-sequence-heatmap', () => ({
-  default: class extends HTMLElement {},
+  default: class extends HTMLElement {
+    heatmapCalls: Array<{
+      xDomain: number[];
+      yDomain: string[];
+      data: unknown[];
+    }> = [];
+    colorFn?: (d: { score: number }) => string;
+    updateComplete = Promise.resolve(true);
+    heatmapInstance = {
+      setColor: (fn: (d: { score: number }) => string) => {
+        this.colorFn = fn;
+      },
+    };
+    setHeatmapData(xDomain: number[], yDomain: string[], data: unknown[]) {
+      this.heatmapCalls.push({ xDomain, yDomain, data });
+    }
+  },
 }));
 vi.mock('@nightingale-elements/nightingale-filter', () => ({
   default: class extends HTMLElement {},
 }));
-// `amColorScale` is only used in `_loadDataInComponents`, which the
-// render/mount tests never invoke. A no-op stub is fine; non-mount
-// specs don't reach this module at all.
+// `<protvista-uniprot>` no longer imports this package by value (the
+// heatmap's colours come from the track's `colorScale`). The stub stays so a
+// spec whose module graph does reach it never pulls in Mol*.
 vi.mock('@nightingale-elements/nightingale-structure', () => ({
   amColorScale: () => '#000000',
 }));

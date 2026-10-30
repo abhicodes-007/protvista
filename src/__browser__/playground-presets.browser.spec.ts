@@ -18,14 +18,12 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
 import defaultConfigYaml from '../default-config.yaml?raw';
-import hotspotsCsv from '../../examples/csv/hotspots.csv?raw';
-import hotspotsJson from '../../examples/json/hotspots.json?raw';
-import csvStyledHits from '../../examples/csv-styled/hits.csv?raw';
-import smallPeptideStructure from '../../examples/small-peptide/structure.csv?raw';
-import conservationCsv from '../../examples/conservation/conservation.csv?raw';
-import conservedSitesCsv from '../../examples/conservation/conserved-sites.csv?raw';
 import { CSS_PREFIX } from '../styles/css-prefix.js';
-import { PRESETS, getPreset } from '../playground/presets.js';
+import {
+  COMMUNITY_PRESETS,
+  PRESETS,
+  getPreset,
+} from '../playground/presets.js';
 import { decodeState } from '../playground/url-state.js';
 import {
   byId,
@@ -39,15 +37,34 @@ import {
   setEditorText,
 } from './playground-page.js';
 
-/** The files the docs site serves under `/protvista/sample-data/`. */
+/**
+ * The files the docs site serves under `/protvista/sample-data/`: copies of
+ * `examples/<dir>/<file>` (two of them at the top level, for the tutorial).
+ */
+const EXAMPLE_FILES = import.meta.glob<string>(
+  '../../examples/*/*.{csv,tsv,json,bed}',
+  { eager: true, query: '?raw', import: 'default' }
+);
 const SERVED: Record<string, string> = {
-  '/protvista/sample-data/hotspots.csv': hotspotsCsv,
-  '/protvista/sample-data/hotspots.json': hotspotsJson,
-  '/protvista/sample-data/csv-styled/hits.csv': csvStyledHits,
-  '/protvista/sample-data/small-peptide/structure.csv': smallPeptideStructure,
-  '/protvista/sample-data/conservation/conservation.csv': conservationCsv,
-  '/protvista/sample-data/conservation/conserved-sites.csv': conservedSitesCsv,
+  '/protvista/sample-data/hotspots.csv':
+    EXAMPLE_FILES['../../examples/csv/hotspots.csv'],
+  '/protvista/sample-data/hotspots.json':
+    EXAMPLE_FILES['../../examples/json/hotspots.json'],
+  ...Object.fromEntries(
+    Object.entries(EXAMPLE_FILES).map(([path, body]) => [
+      path.replace('../../examples/', '/protvista/sample-data/'),
+      body,
+    ])
+  ),
 };
+
+/** Community views give their protein's length in their `preset.json`. */
+// (examples.spec.ts checks these lengths; P05067 always keeps its stub.)
+const COMMUNITY_LENGTHS = new Map(
+  COMMUNITY_PRESETS.filter((p) => p.length && p.accession !== 'P05067').map(
+    (p) => [p.accession, p.length!]
+  )
+);
 
 /**
  * Rubredoxin P24297 as the EBI Proteins API gave it on 2026-10-05: the
@@ -72,7 +89,9 @@ const P01542_SEQUENCE = 'TTCCPSIVARSNFNVCRLPGTPEALCATYTGCIIIPGATCPGDYAN';
 
 /** A protein's sequence for the Proteins API stub. */
 const sequenceOf = (accession: string) =>
-  accession === 'P01542' ? P01542_SEQUENCE : 'M'.repeat(770);
+  accession === 'P01542'
+    ? P01542_SEQUENCE
+    : 'M'.repeat(COMMUNITY_LENGTHS.get(accession) ?? 770);
 
 const STUB_DOMAIN = {
   type: 'DOMAIN',
@@ -502,24 +521,36 @@ describe('playground presets: conservation, your own sequence and small proteins
     expect(byId<HTMLSelectElement>('preset').value).toBe('custom');
   });
 
-  it('every preset renders with nothing listed and no console error', async () => {
-    const errors = vi.spyOn(console, 'error');
+  it('ships twelve presets', () => {
     expect(PRESETS.map((p) => p.id)).toHaveLength(12);
-    for (const preset of PRESETS) {
-      await choose(preset.id);
-      await vi.waitFor(() => expect(preview()).not.toBeNull());
-      await settled();
-      // Give a late failure time to be listed, then check none was.
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(byId('error-summary').textContent, preset.id).toBe(
-        'No problems — config is valid.'
-      );
-      expect(
-        listItems().map((li) => li.textContent),
-        preset.id
-      ).toEqual([]);
-      expect(preview()!.querySelector(`.${CSS_PREFIX}-error-badge`)).toBeNull();
-    }
-    expect(errors).not.toHaveBeenCalled();
   });
+
+  // One test per preset, so adding community views never grows a single test
+  // past its timeout.
+  it.each([...PRESETS, ...COMMUNITY_PRESETS].map((p) => p.id))(
+    '%s renders with nothing listed and no console error',
+    async (id) => {
+      const errors = vi.spyOn(console, 'error');
+      try {
+        await choose(id);
+        await vi.waitFor(() => expect(preview()).not.toBeNull());
+        await settled();
+        // Give a late failure time to be listed, then check none was.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(byId('error-summary').textContent, id).toBe(
+          'No problems — config is valid.'
+        );
+        expect(
+          listItems().map((li) => li.textContent),
+          id
+        ).toEqual([]);
+        expect(
+          preview()!.querySelector(`.${CSS_PREFIX}-error-badge`)
+        ).toBeNull();
+        expect(errors).not.toHaveBeenCalled();
+      } finally {
+        errors.mockRestore();
+      }
+    }
+  );
 });

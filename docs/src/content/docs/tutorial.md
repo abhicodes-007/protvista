@@ -35,6 +35,11 @@ stable 4.x release does not understand it, so use the version Step 1 loads.
 page with no bundler or framework. Load it once and drop the tag in with an
 accession:
 
+Paste the following HTML snippet into the `<body>` of your HTML page.
+This snippet is not YAML or JSON, so do not paste it into the playground's
+config editor. To try the viewer without editing an HTML file, use the
+"Try it live" link below.
+
 ```html
 <script
   type="module"

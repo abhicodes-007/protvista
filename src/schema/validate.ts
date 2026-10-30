@@ -47,6 +47,7 @@ import type {
   ColorScaleConfig,
   DataFormat,
   ShapeName,
+  SemanticKindDefinition,
 } from './types.js';
 import { isGroupConfig } from './discriminate.js';
 import type { Registry } from './registry.js';
@@ -790,10 +791,186 @@ function checkRows(
         code: 'all-tracks-detail-only',
       });
     }
+    checkGroupRenderingFields(group, registry, issues);
     for (const track of group.tracks) {
       checkTrack(group, track, sourceKeys, sources, registry, issues);
     }
   }
+}
+
+/**
+ * The rendering fields only some built-in components read, and what they do
+ * with them. `getTrack()` hands `color`, `shape` and `layout` to the canvas
+ * feature track alone, and `colorScale` reaches the coloured sequence (as
+ * `scale` / `color-range`) and the heatmap (as its per-cell colour, set by
+ * `_setHeatmapData`); the other built-ins have no such attribute. `height`
+ * is not here: every built-in reads it.
+ */
+const SINGLE_COMPONENT_FIELDS = [
+  {
+    field: 'color',
+    components: ['nightingale-track-canvas'],
+    does: 'colours its features.',
+  },
+  {
+    field: 'shape',
+    components: ['nightingale-track-canvas'],
+    does: 'draws feature glyphs.',
+  },
+  {
+    field: 'layout',
+    components: ['nightingale-track-canvas'],
+    does: 'lays features out in rows.',
+  },
+  {
+    field: 'colorScale',
+    components: [
+      'nightingale-colored-sequence',
+      'nightingale-sequence-heatmap',
+    ],
+    does: 'draw a colour scale.',
+  },
+] as const;
+
+/**
+ * Components that read a field on a track but not as a group's collapsed
+ * row. The heatmap takes its cells and colours through `_setHeatmapData`,
+ * which draws a track's own payload only, so a heatmap aggregate never shows
+ * a group's `colorScale`.
+ */
+const TRACK_ONLY_READERS: Readonly<
+  Partial<
+    Record<(typeof SINGLE_COMPONENT_FIELDS)[number]['field'], readonly string[]>
+  >
+> = {
+  colorScale: ['nightingale-sequence-heatmap'],
+};
+
+/**
+ * Extra advice for a canvas feature track that ignores `colorScale`: its
+ * features can carry their own colour. Other components have no such column.
+ */
+function featureColorHint(field: string, components: string[]): string {
+  return field === 'colorScale' &&
+    components.includes('nightingale-track-canvas')
+    ? " To colour single features, give them a 'color' column."
+    : '';
+}
+
+/**
+ * The component a track renders with, resolved as `normalizeTrack` does.
+ */
+function trackComponent(
+  group: GroupConfig | undefined,
+  track: TrackConfig,
+  registry: Registry
+): string {
+  return (
+    track.component ??
+    (track.kind
+      ? registry.getSemanticKind(track.kind)?.component
+      : undefined) ??
+    group?.component ??
+    'nightingale-track-canvas'
+  );
+}
+
+/**
+ * Whether `component` is a built-in that ignores `field`. A consumer
+ * component may read any attribute it likes, so it never counts.
+ */
+function ignoresField(
+  component: string,
+  entry: (typeof SINGLE_COMPONENT_FIELDS)[number]
+): boolean {
+  return (
+    (RENDERABLE_COMPONENT_NAMES as ReadonlySet<string>).has(component) &&
+    !(entry.components as readonly string[]).includes(component)
+  );
+}
+
+/**
+ * Warn when a track sets a single-component rendering field on a component
+ * that ignores it. Only the track's own `rendering` counts: a value inherited
+ * from its group is reported (once) on the group, and `defaults.rendering`
+ * applies to every track, so it is meant to land only where it can.
+ */
+function checkTrackRenderingFields(
+  group: GroupConfig | undefined,
+  track: TrackConfig,
+  trackPath: string,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  const component = trackComponent(group, track, registry);
+  for (const entry of SINGLE_COMPONENT_FIELDS) {
+    if (track.rendering?.[entry.field] === undefined) continue;
+    if (!ignoresField(component, entry)) continue;
+    issues.push({
+      path: trackPath,
+      severity: 'warning',
+      message: `Track ${trackPath}: rendering.${entry.field} has no effect on ${component}; only ${entry.components.join(' and ')} ${entry.does}${featureColorHint(entry.field, [component])}`,
+      code: 'rendering-field-ignored',
+    });
+  }
+}
+
+/**
+ * Warn when a group sets a single-component rendering field that reaches no
+ * component able to use it: not the collapsed aggregate, and not any track
+ * that inherits it (one that sets the field itself, or whose kind presets
+ * it, does not inherit the group's). An aggregate that reads the field only
+ * on a track (`TRACK_ONLY_READERS`) does not count.
+ */
+function checkGroupRenderingFields(
+  group: GroupConfig,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  for (const entry of SINGLE_COMPONENT_FIELDS) {
+    if (group.rendering?.[entry.field] === undefined) continue;
+    const aggregate = aggregateComponent(group, registry);
+    const aggregateTrackOnly =
+      TRACK_ONLY_READERS[entry.field]?.includes(aggregate) ?? false;
+    const inheritors = group.tracks
+      .filter(
+        (t) =>
+          t.rendering?.[entry.field] === undefined &&
+          (t.kind
+            ? registry.getSemanticKind(t.kind)?.rendering?.[entry.field]
+            : undefined) === undefined
+      )
+      .map((t) => trackComponent(group, t, registry));
+    const components = [aggregate, ...inheritors];
+    if (!aggregateTrackOnly && !ignoresField(aggregate, entry)) continue;
+    if (!inheritors.every((c) => ignoresField(c, entry))) continue;
+    const trackOnlyHint = aggregateTrackOnly
+      ? ` A ${aggregate} reads it on its own track, not as a group's collapsed row.`
+      : '';
+    issues.push({
+      path: group.id,
+      severity: 'warning',
+      message: `Group ${group.id}: rendering.${entry.field} has no effect on any of its tracks; only ${entry.components.join(' and ')} ${entry.does}${trackOnlyHint}${featureColorHint(entry.field, components)}`,
+      code: 'rendering-field-ignored',
+    });
+  }
+}
+
+/**
+ * The component a group's collapsed view renders with, inferred as
+ * `normalizeGroup` does: the explicit one, else the one every feeding
+ * (non-`detailOnly`) track shares, else the canvas track.
+ */
+function aggregateComponent(group: GroupConfig, registry: Registry): string {
+  if (group.component) return group.component;
+  const feeding = new Set(
+    group.tracks
+      .filter((t) => !t.detailOnly)
+      .map((t) => trackComponent(group, t, registry))
+  );
+  return feeding.size === 1
+    ? (feeding.values().next().value as string)
+    : 'nightingale-track-canvas';
 }
 
 function checkTrack(
@@ -808,90 +985,16 @@ function checkTrack(
   // track id; grouped tracks keep the `group/track` form.
   const trackPath = group ? `${group.id}/${track.id}` : track.id;
 
-  // Unknown component on track.
-  if (track.component && !componentKnown(track.component, registry)) {
-    issues.push({
-      path: trackPath,
-      message: `Unknown component: '${track.component}' in track ${trackPath}. Valid components: ${knownComponentList(registry)}. Register custom components with registerComponent().`,
-      code: 'unknown-component',
-    });
-  }
-
-  // Unknown semantic kind.
-  if (track.kind !== undefined && !registry.hasSemanticKind(track.kind)) {
-    issues.push({
-      path: trackPath,
-      message:
-        `Unknown semantic kind: '${track.kind}' in track ${trackPath}. ` +
-        (REMOVED_KINDS[track.kind]
-          ? `${REMOVED_KINDS[track.kind]} `
-          : '') +
-        `Valid values: ${listQuoted(registry.listSemanticKinds())}. Register custom kinds with registerSemanticKind().`,
-      code: 'unknown-semantic-kind',
-    });
-  } else if (track.kind !== undefined && !track.component) {
-    // Known kind, no explicit component override: the component the kind
-    // resolves to must itself be registered. A consumer kind whose
-    // component was never `registerComponent()`'d would otherwise fail
-    // late, at `customElements.define()` time (or silently render
-    // nothing) — catch it here, before mount. Built-in kinds always
-    // resolve to a renderable component, so this only bites forgotten
-    // consumer registrations.
-    //
-    // Skipped when `track.component` is set: an explicit component
-    // overrides the kind's component in normalize
-    // (`t.component ?? kindDef?.component ?? …`), so the kind's component
-    // is never actually used, and the explicit one is already validated
-    // by the `track.component` branch above.
-    const resolved = registry.getSemanticKind(track.kind)?.component;
-    if (resolved && !componentKnown(resolved, registry)) {
-      issues.push({
-        path: trackPath,
-        message: `Semantic kind '${track.kind}' in track ${trackPath} resolves to component '${resolved}', which is not registered. Register it with registerComponent().`,
-        code: 'unknown-component',
-      });
-    }
-  }
-
-  // Unknown implicit adapter. A known kind also resolves to an adapter
-  // name (e.g. `features` → `uniprot-features-json`) that the loader looks
-  // up in the registry at fetch time. Built-in kinds always resolve to a
-  // registered adapter; a consumer kind whose adapter was never
-  // registered would otherwise fail late — the loader throws and degrades
-  // the track to empty. Catch it here, mirroring the explicit `adapter:`
-  // check below. Skipped when a data descriptor sets an explicit
-  // `adapter:` (that overrides the kind's adapter and is validated per
-  // descriptor), so the kind's adapter is never actually used.
-  if (track.kind !== undefined && registry.hasSemanticKind(track.kind)) {
-    const kindAdapter = registry.getSemanticKind(track.kind)?.adapter;
-    const hasExplicitAdapter = collectDescriptors(track).some(
-      (d) => !isShorthand(d) && d.adapter !== undefined
-    );
-    if (kindAdapter && !hasExplicitAdapter && !registry.hasAdapter(kindAdapter)) {
-      issues.push({
-        path: trackPath,
-        message: `Semantic kind '${track.kind}' in track ${trackPath} resolves to adapter '${kindAdapter}', which is not registered. Register it with registerAdapter().`,
-        code: 'unknown-adapter',
-      });
-    }
-  }
+  checkTrackComponent(trackPath, track, registry, issues);
+  checkTrackKind(trackPath, track, registry, issues);
+  checkKindComponent(trackPath, track, registry, issues);
+  checkKindAdapter(trackPath, track, registry, issues);
 
   // Runs for every track: the shape/format rules need a `kind`, but the
   // encoding rules apply to a kindless track that states a `format:` too.
   checkKindReadsFileFormat(trackPath, track, sources, registry, issues);
 
-  // Track has no rendering path: no `kind`, no track-level
-  // `component`, and no parent-group `component` to inherit. A
-  // standalone track (no parent group) has no group component to fall
-  // back on, so this check fires for it the same way it does for a
-  // grouped track whose group also lacks a component.
-  if (!track.kind && !track.component && !group?.component) {
-    issues.push({
-      path: trackPath,
-      message: `Track ${trackPath} has no 'kind' or 'component'. Set a semantic 'kind' (e.g. 'features') or provide 'component' explicitly.`,
-      code: 'missing-track-renderer',
-    });
-  }
+  checkTrackRenderer(group, track, trackPath, issues);
 
   // Rendering-level colorScale check. `effectiveRendering` already
   // covers the inheritance case (group's colorScale flows through
@@ -901,11 +1004,142 @@ function checkTrack(
   if (effectiveRendering?.colorScale) {
     checkColorScale(trackPath, effectiveRendering.colorScale, registry, issues);
   }
+  checkTrackRenderingFields(group, track, trackPath, registry, issues);
 
   // Data descriptors.
   for (const descriptor of collectDescriptors(track)) {
     checkDescriptor(trackPath, descriptor, sourceKeys, registry, issues);
   }
+}
+
+/** Unknown component on track. */
+function checkTrackComponent(
+  trackPath: string,
+  track: TrackConfig,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  if (track.component && !componentKnown(track.component, registry)) {
+    issues.push({
+      path: trackPath,
+      message: `Unknown component: '${track.component}' in track ${trackPath}. Valid components: ${knownComponentList(registry)}. Register custom components with registerComponent().`,
+      code: 'unknown-component',
+    });
+  }
+}
+
+/** Unknown semantic kind. */
+function checkTrackKind(
+  trackPath: string,
+  track: TrackConfig,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  if (track.kind === undefined || registry.hasSemanticKind(track.kind)) return;
+  issues.push({
+    path: trackPath,
+    message:
+      `Unknown semantic kind: '${track.kind}' in track ${trackPath}. ` +
+      (REMOVED_KINDS[track.kind]
+        ? `${REMOVED_KINDS[track.kind]} `
+        : '') +
+      `Valid values: ${listQuoted(registry.listSemanticKinds())}. Register custom kinds with registerSemanticKind().`,
+    code: 'unknown-semantic-kind',
+  });
+}
+
+/**
+ * Known kind, no explicit component override: the component the kind
+ * resolves to must itself be registered. A consumer kind whose
+ * component was never `registerComponent()`'d would otherwise fail
+ * late, at `customElements.define()` time (or silently render
+ * nothing) — catch it here, before mount. Built-in kinds always
+ * resolve to a renderable component, so this only bites forgotten
+ * consumer registrations.
+ *
+ * Skipped when `track.component` is set: an explicit component
+ * overrides the kind's component in normalize
+ * (`t.component ?? kindDef?.component ?? …`), so the kind's component
+ * is never actually used, and the explicit one is already validated
+ * by `checkTrackComponent`.
+ */
+function checkKindComponent(
+  trackPath: string,
+  track: TrackConfig,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  if (track.kind === undefined || track.component) return;
+  if (!registry.hasSemanticKind(track.kind)) return;
+  const resolved = registry.getSemanticKind(track.kind)?.component;
+  if (resolved && !componentKnown(resolved, registry)) {
+    issues.push({
+      path: trackPath,
+      message: `Semantic kind '${track.kind}' in track ${trackPath} resolves to component '${resolved}', which is not registered. Register it with registerComponent().`,
+      code: 'unknown-component',
+    });
+  }
+}
+
+/**
+ * Unknown implicit adapter. A known kind also resolves to an adapter
+ * name (e.g. `features` → `uniprot-features-json`) that the loader looks
+ * up in the registry at fetch time. Built-in kinds always resolve to a
+ * registered adapter; a consumer kind whose adapter was never
+ * registered would otherwise fail late — the loader throws and degrades
+ * the track to empty. Catch it here, mirroring the explicit `adapter:`
+ * check in `checkDescriptor`. Skipped when a data descriptor sets an
+ * explicit `adapter:` (that overrides the kind's adapter and is validated
+ * per descriptor), so the kind's adapter is never actually used.
+ */
+function checkKindAdapter(
+  trackPath: string,
+  track: TrackConfig,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  if (track.kind === undefined || !registry.hasSemanticKind(track.kind)) return;
+  const kindAdapter = registry.getSemanticKind(track.kind)?.adapter;
+  const hasExplicitAdapter = collectDescriptors(track).some(setsAdapter);
+  if (kindAdapter && !hasExplicitAdapter && !registry.hasAdapter(kindAdapter)) {
+    issues.push({
+      path: trackPath,
+      message: `Semantic kind '${track.kind}' in track ${trackPath} resolves to adapter '${kindAdapter}', which is not registered. Register it with registerAdapter().`,
+      code: 'unknown-adapter',
+    });
+  }
+}
+
+/**
+ * Track has no rendering path: no `kind`, no track-level
+ * `component`, and no parent-group `component` to inherit. A
+ * standalone track (no parent group) has no group component to fall
+ * back on, so this check fires for it the same way it does for a
+ * grouped track whose group also lacks a component.
+ */
+function checkTrackRenderer(
+  group: GroupConfig | undefined,
+  track: TrackConfig,
+  trackPath: string,
+  issues: ValidationIssue[]
+): void {
+  if (!track.kind && !track.component && !group?.component) {
+    issues.push({
+      path: trackPath,
+      message: `Track ${trackPath} has no 'kind' or 'component'. Set a semantic 'kind' (e.g. 'features') or provide 'component' explicitly.`,
+      code: 'missing-track-renderer',
+    });
+  }
+}
+
+/**
+ * Whether a descriptor sets an explicit `adapter:`, which overrides the
+ * adapter (and the shape/format resolution) its track's kind would choose.
+ */
+function setsAdapter(
+  d: DataSourceDescriptor | { __shorthand: string }
+): boolean {
+  return !isShorthand(d) && d.adapter !== undefined;
 }
 
 /**
@@ -940,121 +1174,183 @@ function checkKindReadsFileFormat(
   // anything more about its sources would be guesswork.
   const def = kind === undefined ? undefined : registry.getSemanticKind(kind);
   if (kind !== undefined && def === undefined) return;
-  const shape = def?.shape;
 
   for (const d of collectDescriptors(track)) {
     // An explicit `adapter:` overrides shape/format resolution entirely —
     // the author has said what reads this source.
-    if (!isShorthand(d) && d.adapter !== undefined) continue;
-
-    const declared = isShorthand(d) ? undefined : d.format;
-    const value = descriptorPath(d, sources);
-    const fromExt = value === undefined ? undefined : formatForPath(value);
-
-    // Inline text with no `format:` is reported per-descriptor in
-    // `checkDescriptor`, which runs whether or not the track has a `kind`.
-    if (
-      !isShorthand(d) &&
-      descriptorFrom(d) === 'inline' &&
-      typeof d.inlineData === 'string' &&
-      declared === undefined
-    ) {
-      continue;
-    }
-
-    // An explicit `format:` overriding the file's own extension is legal —
-    // a misnamed file is exactly why `format:` exists — but say so, since
-    // the author may not have intended it.
-    if (
-      declared !== undefined &&
-      fromExt !== undefined &&
-      fromExt.name !== declared
-    ) {
-      issues.push({
-        path: trackPath,
-        severity: 'warning',
-        message:
-          `Track ${trackPath} declares format: ${declared} for '${value}', whose ` +
-          `extension says ${fromExt.name}. The explicit format wins and the file ` +
-          `is read as ${declared.toUpperCase()}.`,
-        code: 'format-overrides-extension',
-      });
-    }
-
-    // Several sources on one descriptor, read through a format. A format
-    // decodes one body — `runPipeline` takes one, and the loader would drop
-    // the rest — so this is the one descriptor shape the shape/format pair
-    // cannot resolve. Say so here rather than fetching every body as JSON and
-    // handing the first to whatever the kind's provider adapter is.
-    //
-    // Several sources remain the point of a multi-input provider adapter
-    // (`kind: alphafold-confidence` takes two responses), so this fires only
-    // where the author asked for records: an explicit `format:`, extensions
-    // that all name one format, or a shape with no provider adapter to fall
-    // back on. A kind with both a shape and an adapter (`kind: variants`)
-    // sends a list with neither to its adapter, which reads every response.
-    const count = sourceCount(d);
-    const reading = declared ?? commonFormat(d, sources);
-    const readsRecords =
-      declared !== undefined ||
-      (shape !== undefined &&
-        (reading !== undefined || def?.adapter === undefined));
-    if (count > 1 && readsRecords) {
-      issues.push({
-        path: trackPath,
-        message:
-          `Track ${trackPath} lists ${count} sources, but reads them as ` +
-          `${reading === undefined ? 'its own records' : `${reading.toUpperCase()} records`}. ` +
-          `A format reads one file at a time. Use one source per track, or set an ` +
-          `explicit 'adapter:' that takes several responses.`,
-        code: 'multi-source-format',
-      });
-      continue;
-    }
-
-    const format = declared ?? fromExt?.name;
-    if (format === undefined) continue;
-
-    // The remaining rules compare the format against the records the track
-    // draws, which only a `kind` names.
-    if (kind === undefined) continue;
-
-    // A kind with no shape has no bring-your-own-data path at all: its
-    // adapter takes a provider response, and in the AlphaFold/AlphaMissense
-    // cases two of them plus a further fetch, which no single file provides.
-    if (shape === undefined) {
-      const byod = registry
-        .listSemanticKinds()
-        .filter((k) => registry.getSemanticKind(k)?.shape !== undefined);
-      issues.push({
-        path: trackPath,
-        message:
-          `Semantic kind '${kind}' in track ${trackPath} reads its provider's feed and ` +
-          `cannot read a file. Kinds that accept your own data: ${listQuoted(new Set(byod))}. ` +
-          `To use this source anyway, set an explicit 'adapter:' on the data descriptor.`,
-        code: 'kind-format-mismatch',
-      });
-      continue;
-    }
-
-    // Most formats are containers and carry whatever records the track asks
-    // for. BED is not: it encodes feature semantics, so it can only produce
-    // feature records.
-    if (!formatCanProduce(format, shape)) {
-      const emits = DATA_FORMATS[format].emitsShape as ShapeName;
-      const alternatives = registry
-        .listSemanticKinds()
-        .filter((k) => registry.getSemanticKind(k)?.shape === emits);
-      issues.push({
-        path: trackPath,
-        message:
-          `${format.toUpperCase()} files carry ${shapeLabel(emits)}; kind '${kind}' in ` +
-          `track ${trackPath} draws ${shapeLabel(shape)}. Use a kind that draws ` +
-          `${shapeLabel(emits)} (${listQuoted(new Set(alternatives))}), or convert the file.`,
-        code: 'kind-format-mismatch',
-      });
-    }
+    if (setsAdapter(d)) continue;
+    checkDescriptorFormat(trackPath, kind, def, d, sources, registry, issues);
   }
+}
+
+/**
+ * The format rules of `checkKindReadsFileFormat` for one descriptor, in
+ * order: an override worth mentioning, then several sources no format can
+ * read, then — for a track with a `kind` — whether the kind can draw what the
+ * format carries.
+ */
+function checkDescriptorFormat(
+  trackPath: string,
+  kind: string | undefined,
+  def: SemanticKindDefinition | undefined,
+  d: DataSourceDescriptor | { __shorthand: string },
+  sources: Record<string, string>,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  // Inline text with no `format:` is reported per-descriptor in
+  // `checkDescriptor`, which runs whether or not the track has a `kind`.
+  if (isUnformattedInlineText(d)) return;
+
+  const declared = isShorthand(d) ? undefined : d.format;
+  const value = descriptorPath(d, sources);
+  const fromExt = value === undefined ? undefined : formatForPath(value)?.name;
+
+  checkFormatOverridesExtension(trackPath, declared, value, fromExt, issues);
+  if (checkMultiSourceFormat(trackPath, d, declared, def, sources, issues)) {
+    return;
+  }
+
+  const format = declared ?? fromExt;
+  if (format === undefined) return;
+
+  // The remaining rules compare the format against the records the track
+  // draws, which only a `kind` names.
+  if (kind === undefined) return;
+  checkKindAcceptsFormat(trackPath, kind, def?.shape, format, registry, issues);
+}
+
+/**
+ * Inline text with no `format:` to say how to decode it.
+ */
+function isUnformattedInlineText(
+  d: DataSourceDescriptor | { __shorthand: string }
+): boolean {
+  return (
+    !isShorthand(d) &&
+    descriptorFrom(d) === 'inline' &&
+    typeof d.inlineData === 'string' &&
+    d.format === undefined
+  );
+}
+
+/**
+ * An explicit `format:` overriding the file's own extension is legal — a
+ * misnamed file is exactly why `format:` exists — but say so, since the author
+ * may not have intended it.
+ */
+function checkFormatOverridesExtension(
+  trackPath: string,
+  declared: DataFormat | undefined,
+  value: string | undefined,
+  fromExt: DataFormat | undefined,
+  issues: ValidationIssue[]
+): void {
+  if (declared === undefined || fromExt === undefined || fromExt === declared) {
+    return;
+  }
+  issues.push({
+    path: trackPath,
+    severity: 'warning',
+    message:
+      `Track ${trackPath} declares format: ${declared} for '${value}', whose ` +
+      `extension says ${fromExt}. The explicit format wins and the file ` +
+      `is read as ${declared.toUpperCase()}.`,
+    code: 'format-overrides-extension',
+  });
+}
+
+/**
+ * Several sources on one descriptor, read through a format. A format decodes
+ * one body — `runPipeline` takes one, and the loader would drop the rest — so
+ * this is the one descriptor shape the shape/format pair cannot resolve. Say
+ * so here rather than fetching every body as JSON and handing the first to
+ * whatever the kind's provider adapter is.
+ *
+ * Several sources remain the point of a multi-input provider adapter (`kind:
+ * alphafold-confidence` takes two responses), so this fires only where the
+ * author asked for records: an explicit `format:`, extensions that all name
+ * one format, or a shape with no provider adapter to fall back on. A kind with
+ * both a shape and an adapter (`kind: variants`) sends a list with neither to
+ * its adapter, which reads every response.
+ *
+ * Returns whether it reported, since nothing more can usefully be said about
+ * that descriptor's format.
+ */
+function checkMultiSourceFormat(
+  trackPath: string,
+  d: DataSourceDescriptor | { __shorthand: string },
+  declared: DataFormat | undefined,
+  def: SemanticKindDefinition | undefined,
+  sources: Record<string, string>,
+  issues: ValidationIssue[]
+): boolean {
+  const count = sourceCount(d);
+  const reading = declared ?? commonFormat(d, sources);
+  const readsRecords =
+    declared !== undefined ||
+    (def?.shape !== undefined &&
+      (reading !== undefined || def.adapter === undefined));
+  if (count <= 1 || !readsRecords) return false;
+  issues.push({
+    path: trackPath,
+    message:
+      `Track ${trackPath} lists ${count} sources, but reads them as ` +
+      `${reading === undefined ? 'its own records' : `${reading.toUpperCase()} records`}. ` +
+      `A format reads one file at a time. Use one source per track, or set an ` +
+      `explicit 'adapter:' that takes several responses.`,
+    code: 'multi-source-format',
+  });
+  return true;
+}
+
+/**
+ * Whether a kind can draw the records a format carries.
+ *
+ * A kind with no shape has no bring-your-own-data path at all: its adapter
+ * takes a provider response, and in the AlphaFold/AlphaMissense cases two of
+ * them plus a further fetch, which no single file provides.
+ *
+ * Most formats are containers and carry whatever records the track asks for.
+ * BED is not: it encodes feature semantics, so it can only produce feature
+ * records.
+ */
+function checkKindAcceptsFormat(
+  trackPath: string,
+  kind: string,
+  shape: ShapeName | undefined,
+  format: DataFormat,
+  registry: Registry,
+  issues: ValidationIssue[]
+): void {
+  if (shape === undefined) {
+    const byod = registry
+      .listSemanticKinds()
+      .filter((k) => registry.getSemanticKind(k)?.shape !== undefined);
+    issues.push({
+      path: trackPath,
+      message:
+        `Semantic kind '${kind}' in track ${trackPath} reads its provider's feed and ` +
+        `cannot read a file. Kinds that accept your own data: ${listQuoted(new Set(byod))}. ` +
+        `To use this source anyway, set an explicit 'adapter:' on the data descriptor.`,
+      code: 'kind-format-mismatch',
+    });
+    return;
+  }
+
+  if (formatCanProduce(format, shape)) return;
+  const emits = DATA_FORMATS[format].emitsShape as ShapeName;
+  const alternatives = registry
+    .listSemanticKinds()
+    .filter((k) => registry.getSemanticKind(k)?.shape === emits);
+  issues.push({
+    path: trackPath,
+    message:
+      `${format.toUpperCase()} files carry ${shapeLabel(emits)}; kind '${kind}' in ` +
+      `track ${trackPath} draws ${shapeLabel(shape)}. Use a kind that draws ` +
+      `${shapeLabel(emits)} (${listQuoted(new Set(alternatives))}), or convert the file.`,
+    code: 'kind-format-mismatch',
+  });
 }
 
 /**
