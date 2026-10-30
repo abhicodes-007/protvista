@@ -49,7 +49,8 @@ const THEME_TO_ATTRS: Readonly<
   // `-` is the pathogenicity adapter's placeholder for a residue the CSV has
   // no score for. Without its own entry nightingale-colored-sequence would
   // draw it at 0, the certainly-benign colour; at -1 it lands on a
-  // transparent stop that no real score (all within 0..1) reaches.
+  // transparent stop that no real score (all within 0..1) reaches. The
+  // heatmap's colour function leaves that stop out (see PLACEHOLDER_STOPS).
   'alphamissense-ramp': {
     scale:
       '-:-1,B:0,H:0.1132,V:0.2264,L:0.3395,A:0.4527,l:0.5895,h:0.7264,p:0.8632,P:1',
@@ -57,6 +58,13 @@ const THEME_TO_ATTRS: Readonly<
       'transparent:-1,#2166ac:0,#4290bf:0.1132,#8cbcd4:0.2264,#c3d6e0:0.3395,#e2e2e2:0.4527,#edcdba:0.5895,#e99e7c:0.7264,#d15e4b:0.8632,#b2182b:1',
   },
 };
+
+/**
+ * Built-in theme stops that only give a coloured sequence's placeholder
+ * character a colour, so they are not part of the numeric ramp a colour
+ * function interpolates.
+ */
+const PLACEHOLDER_STOPS: ReadonlySet<string> = new Set(['transparent:-1']);
 
 /**
  * Render a `ColorScaleConfig` to Nightingale's flat `(scale,
@@ -110,10 +118,13 @@ export function colorScaleToColorFn(
   if (cs.stops && cs.stops.length > 0) {
     stops = cs.stops;
   } else if (cs.theme && THEME_TO_ATTRS[cs.theme]) {
-    stops = THEME_TO_ATTRS[cs.theme].colorRange.split(',').map((pair) => {
-      const [color, value] = pair.split(':');
-      return { color, value: Number(value) };
-    });
+    stops = THEME_TO_ATTRS[cs.theme].colorRange
+      .split(',')
+      .filter((pair) => !PLACEHOLDER_STOPS.has(pair))
+      .map((pair) => {
+        const [color, value] = pair.split(':');
+        return { color, value: Number(value) };
+      });
   } else if (cs.theme) {
     stops = getTheme?.(cs.theme);
   }
