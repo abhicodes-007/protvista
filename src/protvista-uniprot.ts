@@ -157,7 +157,6 @@ import {
 import {
   routeFailure,
   type FailureChannels,
-  type FailureCode,
   type FailureReport,
 } from './errors/router.js';
 import {
@@ -171,8 +170,12 @@ import type { FormattedError } from './errors/format.js';
 import {
   NOTE_UI,
   NOTICE_TEXT,
+  buildErrorDetail,
   mergeFacts,
+  panelDetail,
   stripTag,
+  upsertNote,
+  type Note,
   type NoticeCode,
   type NoticeFacts,
 } from './errors/notices.js';
@@ -232,43 +235,6 @@ const LOADING_ANNOUNCEMENT = 'Loading protein data…';
  * point where a quick load would never announce at all.
  */
 const LIVE_REGION_SETTLE_MS = 100;
-
-/** At most this many notes per anchor; a runaway caller can't grow it. */
-const MAX_NOTES_PER_ANCHOR = 200;
-
-/**
- * One warning, kept for the visitor notice and author mode. Every routed
- * warning is recorded, whatever the display switches say, so turning either
- * on at runtime shows what already happened.
- *
- * `lifecycle` says what clears it: a new config (`config`), a new load of its
- * track (`load`), or a new config as well (`api` — `setTrackData()` misuse,
- * which no load repeats).
- */
-interface Note {
-  /** `'viewer'`, or the `${rowId}-${trackId}` key of the track it is about. */
-  anchor: string;
-  phase: ErrorPhase;
-  code?: FailureCode;
-  /** The routed visitor notice, if any. */
-  notice: 'track' | 'viewer' | null;
-  /** The author text: each issue's message, or the event's message. */
-  texts: string[];
-  /** Each issue's config path, where it has one. */
-  paths?: string[];
-  source?: string;
-  facts?: NoticeFacts;
-  /**
-   * The track (or row) key behind each name in `facts`, in the same order,
-   * so a name can be left out while the layout hides its track.
-   */
-  factKeys?: { names?: string[]; partial?: string[] };
-  /** What identifies it when its text does not (see `_report`'s `noteKey`). */
-  key?: string;
-  lifecycle: 'config' | 'load' | 'api';
-  /** How many identical `api` notes this one stands for. */
-  repeat: number;
-}
 
 /**
  * Outcome of the top-level sequence fetch (`loadEntry`). Either the parsed
@@ -3202,27 +3168,7 @@ class ProtvistaUniprot extends LitElement {
     if (channels.event) {
       this.dispatchEvent(
         new CustomEvent('protvista-error', {
-          detail: {
-            phase: report.phase,
-            // How bad it is, so a listener can tell a warning from a failure
-            // without inferring it. A viewer-scoped warning (a theme colour
-            // that did not resolve, a component with no renderer) carries no
-            // `issues`, so the `issue.severity` check that works for config
-            // warnings has nothing to read.
-            severity: report.severity,
-            // What the visible surface says. Without it the event was the one
-            // channel that could not say *what* went wrong: a malformed file
-            // reported `errorKind: 'adapter'` and a URL, while the text naming
-            // the file and the offending row — the whole reason the failure is
-            // worth surfacing — reached only the badge. A failure that raises
-            // the panel carries the panel's own summary rather than the
-            // developer line, and the console's `[protvista…]` tag is dropped:
-            // the documented use is putting this text in front of a user.
-            message: personMessage,
-            ...(report.source !== undefined ? { source: report.source } : {}),
-            issues: opts.issues ?? [],
-            context: { accession: this.accession, ...opts.context },
-          },
+          detail: buildErrorDetail(report, opts, this.accession, personMessage),
           bubbles: true,
         })
       );
@@ -3234,12 +3180,7 @@ class ProtvistaUniprot extends LitElement {
         opts.panelSummary ?? report.message.split('\n')[0],
         opts.issues,
         channels.retry,
-        [
-          stripTag(report.message),
-          ...(report.source !== undefined
-            ? [NOTE_UI.source(report.source)]
-            : []),
-        ]
+        panelDetail(report)
       );
     }
 
@@ -3248,56 +3189,7 @@ class ProtvistaUniprot extends LitElement {
     // Errors are not: author mode reads them from `_trackErrors` and
     // `_mountError`, which already hold them and already clear on Retry.
     if (report.severity === 'warning') {
-      const anchor =
-        report.scope === 'viewer' ? 'viewer' : report.scope.trackKey;
-      const issues = opts.issues ?? [];
-      const texts = issues.length
-        ? issues.map((i) => i.message)
-        : [personMessage];
-      const lifecycle =
-        report.phase === 'config'
-          ? 'config'
-          : report.phase === 'set-track-data'
-            ? 'api'
-            : 'load';
-      const same = this._notes.find(
-        (n) =>
-          n.anchor === anchor &&
-          n.phase === report.phase &&
-          n.code === report.code &&
-          (opts.noteKey !== undefined
-            ? n.key === opts.noteKey
-            : n.texts.join('\n') === texts.join('\n'))
-      );
-      if (same) {
-        // Three identical `setTrackData()` misuses are three calls. A load or
-        // config warning reported again — a targeted Retry re-reporting a
-        // skipped template it shares — is the same fact, not a second one.
-        if (same.lifecycle === 'api') same.repeat += 1;
-      } else if (
-        this._notes.filter((n) => n.anchor === anchor).length <
-        MAX_NOTES_PER_ANCHOR
-      ) {
-        this._notes = [
-          ...this._notes,
-          {
-            anchor,
-            phase: report.phase,
-            ...(report.code !== undefined ? { code: report.code } : {}),
-            notice: channels.notice,
-            texts,
-            ...(issues.some((i) => i.path)
-              ? { paths: issues.map((i) => i.path) }
-              : {}),
-            ...(report.source !== undefined ? { source: report.source } : {}),
-            ...(opts.noticeFacts ? { facts: opts.noticeFacts } : {}),
-            ...(opts.noticeKeys ? { factKeys: opts.noticeKeys } : {}),
-            ...(opts.noteKey !== undefined ? { key: opts.noteKey } : {}),
-            lifecycle,
-            repeat: 1,
-          },
-        ];
-      }
+      this._notes = upsertNote(this._notes, report, opts, channels.notice);
     }
 
     this.requestUpdate();
