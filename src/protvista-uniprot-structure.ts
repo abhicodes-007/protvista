@@ -16,6 +16,7 @@ import ProtvistaUniprotDatatable, {
   type ColumnConfig,
 } from './protvista-uniprot-datatable.js';
 import { fetchAll, loadComponent } from './utils/index.js';
+import { isSafeUrl } from './utils/security.js';
 import downloadIcon from './icons/download.svg';
 import externalLinkIcon from './icons/external-link.svg';
 
@@ -486,29 +487,51 @@ class ProtvistaUniprotStructure extends LitElement {
   }
 
   /**
-   * The URL to request for `which`: its override when set, otherwise the
-   * default, with its `{tokens}` filled. Empty — no request, as for the
-   * requests a checksum lookup doesn't make — when a token has no usable
-   * value, which is reported rather than requested half-built.
+   * The URL to request for `which`. With no override, the EBI default with
+   * the accession or checksum put in as written, exactly as it always was.
+   * An override has its `{tokens}` filled like any data URL's. Empty — no
+   * request, as for the requests a checksum lookup doesn't make — when the
+   * override is empty or a token has no usable value, which is reported
+   * rather than requested half-built.
    */
   private requestUrl(which: keyof typeof defaultUrls): string {
-    const template = this[which] ?? defaultUrls[which];
+    const override = this[which];
+    if (override == null) {
+      return defaultUrls[which].replace(
+        /\{(accession|checksum)\}/g,
+        (_, name: 'accession' | 'checksum') => String(this[name])
+      );
+    }
     const vars = mergeVariables({
       dataset: this.dataset,
       accession: this.accession,
     });
-    if (this.checksum !== undefined) vars.checksum = this.checksum;
-    const result = substituteTemplate(template, vars);
+    if (this.checksum != null) vars.checksum = this.checksum;
+    const result = substituteTemplate(override, vars);
     if ('url' in result) return result.url;
     const tokens = (
       'unresolved' in result ? result.unresolved : result.invalid
     ).map((t) => `{${t}}`);
     console.warn(
-      `[protvista-uniprot-structure] Not fetching '${template}': ` +
+      `[protvista-uniprot-structure] Not fetching '${override}': ` +
         `${'unresolved' in result ? 'undefined' : 'invalid value for'} ` +
         `${tokens.join(', ')}.`
     );
     return '';
+  }
+
+  /**
+   * The three URLs a load requests, in order: UniProtKB, AlphaFold DB and
+   * 3D-Beacons by accession, or only 3D-Beacons by checksum. An empty one
+   * is not requested.
+   */
+  private requestUrls(): [string, string, string] {
+    const byAccession = !!this.accession && !this.checksum;
+    return [
+      byAccession ? this.requestUrl('uniprotUrl') : '',
+      byAccession ? this.requestUrl('alphafoldUrl') : '',
+      this.requestUrl(byAccession ? 'beaconsUrl' : 'beaconsChecksumUrl'),
+    ];
   }
 
   private getColumns(): ColumnConfig<ProcessedStructureData>[] {
@@ -583,7 +606,13 @@ class ProtvistaUniprotStructure extends LitElement {
           ? html`<a href="${alphaFoldLinkUrl}${this.accession}">AlphaFold</a>`
           : nothing
       }
-      ${sourceDBLink ? html`<a href="${sourceDBLink}">${source}</a>` : nothing}
+      ${
+        // A response's own link, from whatever server a URL override names:
+        // only an http(s) one is rendered, never a `javascript:` one.
+        isSafeUrl(sourceDBLink)
+          ? html`<a href="${sourceDBLink}">${source}</a>`
+          : nothing
+      }
     `;
   }
 
@@ -591,7 +620,7 @@ class ProtvistaUniprotStructure extends LitElement {
     const { downloadUrl, source, id } = row;
 
     return html`
-      ${downloadUrl ? html`${sourceDownloadLink(downloadUrl)}` : nothing}
+      ${isSafeUrl(downloadUrl) ? html`${sourceDownloadLink(downloadUrl)}` : nothing}
       ${
         (source === 'PDB' || source === 'AlphaFold DB') && this.accession
           ? html` ·
@@ -607,15 +636,48 @@ class ProtvistaUniprotStructure extends LitElement {
   async connectedCallback() {
     super.connectedCallback();
     warnLostProperties(this, { data: 'data' });
-    if (!this.accession && !this.checksum) return;
-    const byAccession = !!this.accession && !this.checksum;
-    const pdbUrl = byAccession ? this.requestUrl('uniprotUrl') : '';
-    const alphaFoldUrl = byAccession ? this.requestUrl('alphafoldUrl') : '';
-    const beaconsUrl = this.requestUrl(
-      byAccession ? 'beaconsUrl' : 'beaconsChecksumUrl'
-    );
+    await this.load();
+  }
 
-    const rawData = await fetchAll([pdbUrl, alphaFoldUrl, beaconsUrl]);
+  /**
+   * Load again when a URL override is set or changed after the first load
+   * (the viewer hands on new ones when a `data-*` value they use changes).
+   * The first update, which carries the attributes the element was created
+   * with, finds the URLs `connectedCallback` already asked for and does
+   * nothing.
+   */
+  private reloadIfUrlsChanged(changed: PropertyValues) {
+    if (
+      this.requestedUrls !== undefined &&
+      (changed.has('uniprotUrl') ||
+        changed.has('alphafoldUrl') ||
+        changed.has('beaconsUrl') ||
+        changed.has('beaconsChecksumUrl')) &&
+      this.requestUrls().join('\n') !== this.requestedUrls
+    ) {
+      this.load();
+    }
+  }
+
+  /** The URLs the latest `load()` asked for, joined for comparison. */
+  private requestedUrls?: string;
+
+  /** Bumped per `load()`; an older load's responses are dropped. */
+  private loadGeneration = 0;
+
+  private async load() {
+    if (!this.accession && !this.checksum) return;
+    const reload = this.requestedUrls !== undefined;
+    const generation = ++this.loadGeneration;
+    const urls = this.requestUrls();
+    this.requestedUrls = urls.join('\n');
+    const [pdbUrl, alphaFoldUrl, beaconsUrl] = urls;
+    if (reload) this.loading = true;
+
+    // An empty URL is skipped, not fetched: `fetch('')` would request the
+    // host page itself.
+    const rawData = await fetchAll(urls.filter((url) => url !== ''));
+    if (generation !== this.loadGeneration) return;
     this.loading = false;
 
     const pdbData = processPDBData(rawData[pdbUrl] || []);
@@ -664,8 +726,14 @@ class ProtvistaUniprotStructure extends LitElement {
     this.data = data;
     this.columns = this.getColumns();
 
-    // Default to the first row only if the consumer hasn't pre-set a selection.
-    if (data.length > 0 && !this.selectedId) {
+    // Default to the first row only if the consumer hasn't pre-set a
+    // selection. A reload replaces the rows, so a selection it no longer
+    // has moves to the first row too.
+    if (
+      data.length > 0 &&
+      (!this.selectedId ||
+        (reload && !data.some(({ id }) => id === this.selectedId)))
+    ) {
       this.selectedId = data[0].id;
     }
 
@@ -694,6 +762,7 @@ class ProtvistaUniprotStructure extends LitElement {
   }
 
   protected override willUpdate(changed: PropertyValues) {
+    this.reloadIfUrlsChanged(changed);
     // Apply when either selection or data changes — covers consumer
     // pre-setting selected-id before the async fetch resolves.
     if (changed.has('selectedId') || changed.has('data')) {

@@ -735,6 +735,14 @@ class ProtvistaUniprot extends LitElement {
   private _lastLoadVariables?: string;
 
   /**
+   * What the most recent `_init()` resolved the sequence entry URL to (see
+   * `_entryUrlKey`). A `data-*` change re-runs `_init()` when this differs,
+   * so a `sources.sequenceEntry` token the page sets late, or changes, is
+   * requested like a track URL's.
+   */
+  private _lastEntryUrl?: string;
+
+  /**
    * Mount-level error state. When set, `render()` shows the alert panel
    * instead of the viewer (or the silent blank it used to show for a
    * config / sequence failure). For a config failure the rich
@@ -1966,10 +1974,30 @@ class ProtvistaUniprot extends LitElement {
    */
   private _onVariablesChanged(): void {
     if (!this.config || this.suspend || !this._proteinKey) return;
+    // The sequence entry's URL changed: reload the whole mount, as a Retry
+    // does — a panel for the old URL is cleared first.
+    if (this._entryUrlKey() !== this._lastEntryUrl) {
+      if (this._mountError?.phase === 'sequence') this._retryMount();
+      else this._init();
+      return;
+    }
+    // The structure panel's URLs are filled in `render()`, and the panel
+    // requests them again when they change.
+    this.requestUpdate();
     if (this._variablesKey(this._variables()) === this._lastLoadVariables) {
       return;
     }
     this._loadData();
+  }
+
+  /**
+   * The sequence entry URL as `_init()` would resolve it now, comparable
+   * with `_lastEntryUrl`. `undefined` when `_init()` requests no entry (a
+   * `sequence:` config, or no accession).
+   */
+  private _entryUrlKey(): string | undefined {
+    if (this.config?.sequence || !this.accession) return undefined;
+    return JSON.stringify(this._entryUrl(this.accession));
   }
 
   /**
@@ -2770,6 +2798,7 @@ class ProtvistaUniprot extends LitElement {
     // it clears `_sequencePending`, so an accession → sequence `setConfig()`
     // mid-fetch would otherwise leave the spinner up for good. The generation
     // bump above also keeps that late result from overwriting this sequence.
+    this._lastEntryUrl = this._entryUrlKey();
     const resolved = this.config?.sequence;
     if (resolved) {
       this._sequencePending = false;
@@ -4053,14 +4082,19 @@ class ProtvistaUniprot extends LitElement {
 
   /**
    * The URL `loadEntry` requests for `accession`: the config's
-   * `sources.sequenceEntry` when it has one, otherwise the Proteins API
-   * entry, with its `{tokens}` filled like any data URL's. When a token has
-   * no usable value, the template and the reason nothing can be requested.
+   * `sources.sequenceEntry` with its `{tokens}` filled like any data URL's,
+   * or else the Proteins API entry. When a token has no usable value, the
+   * template and the reason nothing can be requested.
    */
   private _entryUrl(
     accession: string
   ): { url: string } | { template: string; reason: string } {
-    const template = this.config?.sources?.sequenceEntry ?? DEFAULT_ENTRY_URL;
+    const template = this.config?.sources?.sequenceEntry;
+    // The default puts the accession in as written, exactly as it always
+    // has: an accession outside `ACCESSION_PATTERN` still names its entry.
+    if (template === undefined) {
+      return { url: DEFAULT_ENTRY_URL.replace('{accession}', () => accession) };
+    }
     const vars = this._variables();
     vars.accession = accession;
     const result = substituteTemplate(template, vars);

@@ -60,8 +60,20 @@ them to EBI. A config's `sources:` can now replace each one, with the keys
 `sequenceEntry`, `structureUniprot`, `structureAlphafold` and
 `structureBeacons`, and their `{tokens}` are filled like any data URL's. A
 page using `<protvista-uniprot-structure>` on its own sets the `uniprot-url`,
-`alphafold-url` and `beacons-url` attributes instead. Set nothing and the
+`alphafold-url` and `beacons-url` attributes instead, and
+`beacons-checksum-url` for its 3D-Beacons lookup by `checksum` (default
+`https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5`).
+When a `data-*` value on `<protvista-uniprot>` that one of these URLs uses
+changes, the URL is requested again, as a data URL is. Set nothing and the
 viewer makes the same requests as before.
+
+### Fixed: the 3D structure panel's skipped requests and response links
+
+The structure panel used to request the page it was on for each lookup it
+skipped, such as the two that a search by `checksum` doesn't make. It now
+requests nothing for them. It also renders a link from a structure response
+only when that link is `http`, `https` or `mailto`, so a server that a URL
+override points at can't add a `javascript:` link.
 
 ### Fixed: AlphaMissense tracks tolerate imperfect annotation files
 

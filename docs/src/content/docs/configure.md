@@ -104,6 +104,14 @@ Their `{tokens}` are filled like any data URL's, from the
 the default it replaces. A [`sequence:`](#sequence) config makes none of these
 requests.
 
+A page that uses `<protvista-uniprot-structure>` on its own sets these as the
+`uniprot-url`, `alphafold-url` and `beacons-url` attributes instead (see
+[Embed the viewer](/protvista/embed)). Given a `checksum` in place of an
+accession, that element makes a single 3D-Beacons lookup by sequence MD5, which
+its `beacons-checksum-url` attribute replaces. Its default is
+`https://www.ebi.ac.uk/pdbe/pdbe-kb/3dbeacons/api/v2/sequence/summary?id={checksum}&type=md5`,
+with `{checksum}` filled in.
+
 ### `variables`
 
 Baseline values for other `{tokens}` in your data URLs. The page can override

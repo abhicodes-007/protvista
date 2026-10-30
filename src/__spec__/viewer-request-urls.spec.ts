@@ -148,6 +148,194 @@ describe('the sequence entry', () => {
       .find((arg): arg is Error => arg instanceof Error);
     expect(cause?.message).toContain('undefined variable(s) {species}');
   });
+
+  it('is not requested when a token value is refused', async () => {
+    const fetchFn = stubFetch();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const el = mountEl(
+      config({
+        variables: { release: '..' },
+        sources: {
+          sequenceEntry: 'https://mirror.example.org/{release}/{accession}',
+        },
+      })
+    );
+    await vi.waitFor(() => {
+      if (!el.querySelector(PANEL)) throw new Error('no panel yet');
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+    const cause = warn.mock.calls
+      .flat()
+      .find((arg): arg is Error => arg instanceof Error);
+    expect(cause?.message).toContain('invalid value for {release}');
+  });
+
+  it('keeps an accession outside the token pattern in the default', async () => {
+    // A versioned accession was put into the entry URL as written, and
+    // still is: only an override's `{accession}` is held to the pattern.
+    const fetchFn = stubFetch();
+    const el = mountEl(config({ accession: 'P05067.2' }));
+    await ready(el);
+    expect(fetchedUrls(fetchFn)).toEqual([
+      'https://www.ebi.ac.uk/proteins/api/proteins/P05067.2',
+    ]);
+  });
+});
+
+type ErrorEvent = CustomEvent<{
+  phase: string;
+  source?: string;
+  context: Record<string, unknown>;
+}>;
+
+/** Mount `viewerConfig` and wait for its sequence-phase `protvista-error`. */
+async function sequenceFailure(viewerConfig: unknown) {
+  const events: ErrorEvent[] = [];
+  const el = document.createElement('protvista-uniprot') as unknown as El;
+  el.addEventListener('protvista-error', (e) => events.push(e as ErrorEvent));
+  el.viewerConfig = viewerConfig;
+  document.body.append(el);
+  appended.push(el);
+  await vi.waitFor(() => {
+    if (!el.querySelector(PANEL)) throw new Error('no panel yet');
+    if (!events.some((e) => e.detail.phase === 'sequence')) {
+      throw new Error('no sequence event yet');
+    }
+  });
+  return {
+    el,
+    detail: events.find((e) => e.detail.phase === 'sequence')!.detail,
+  };
+}
+
+const stub503 = () =>
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 503,
+          json: async () => ({}),
+          text: async () => '',
+        }) as unknown as Response
+    )
+  );
+
+describe('a sequence entry failure', () => {
+  const RETRY = `.${CSS_PREFIX}-error-retry`;
+
+  it('names the overridden entry URL on a 503', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stub503();
+    const { el, detail } = await sequenceFailure(
+      config({
+        sources: { sequenceEntry: 'https://mirror.example.org/{accession}' },
+      })
+    );
+    expect(detail.source).toBe('https://mirror.example.org/P05067');
+    expect(detail.context.url).toBe('https://mirror.example.org/P05067');
+    expect(detail.context.errorKind).toBe('http');
+    expect(el.querySelector(`${PANEL} ${RETRY}`)).not.toBeNull();
+  });
+
+  it('names the default entry URL on a 503', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stub503();
+    const { el, detail } = await sequenceFailure(config());
+    expect(detail.source).toBe(DEFAULT_ENTRY);
+    expect(detail.context.url).toBe(DEFAULT_ENTRY);
+    expect(el.querySelector(`${PANEL} ${RETRY}`)).not.toBeNull();
+  });
+
+  it('names no URL or error kind for an unresolved token', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchFn = stubFetch();
+    const { el, detail } = await sequenceFailure(
+      config({
+        sources: {
+          sequenceEntry: 'https://mirror.example.org/{species}/{accession}',
+        },
+      })
+    );
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(detail.source).toBeUndefined();
+    expect(detail.context).not.toHaveProperty('url');
+    expect(detail.context).not.toHaveProperty('errorKind');
+    expect(el.querySelector(`${PANEL} ${RETRY}`)).toBeNull();
+  });
+});
+
+describe('a data-* change', () => {
+  const speciesConfig = config({
+    sources: {
+      sequenceEntry: 'https://mirror.example.org/{species}/{accession}',
+      structureBeacons:
+        'https://mirror.example.org/beacons/{species}/{accession}',
+    },
+  });
+
+  it('requests the entry once a missing token is set', async () => {
+    const fetchFn = stubFetch();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const el = mountEl(speciesConfig);
+    await vi.waitFor(() => {
+      if (!el.querySelector(PANEL)) throw new Error('no panel yet');
+    });
+    el.dataset.species = 'human';
+    await ready(el);
+    expect(fetchedUrls(fetchFn)).toEqual([
+      'https://mirror.example.org/human/P05067',
+    ]);
+    expect(el.querySelector(PANEL)).toBeNull();
+  });
+
+  it('re-requests the entry and hands the panel the new URL', async () => {
+    const fetchFn = stubFetch();
+    const el = mountEl(speciesConfig, { species: 'human' });
+    await ready(el);
+    const structure = () => el.querySelector('protvista-uniprot-structure');
+    expect(structure()?.getAttribute('beacons-url')).toBe(
+      'https://mirror.example.org/beacons/human/P05067'
+    );
+    el.dataset.species = 'mouse';
+    await vi.waitFor(() => {
+      if (
+        !fetchedUrls(fetchFn).includes(
+          'https://mirror.example.org/mouse/P05067'
+        )
+      ) {
+        throw new Error('entry not re-requested');
+      }
+    });
+    await ready(el);
+    expect(structure()?.getAttribute('beacons-url')).toBe(
+      'https://mirror.example.org/beacons/mouse/P05067'
+    );
+  });
+
+  it('hands the panel a new URL when only its token changes', async () => {
+    stubFetch();
+    const el = mountEl(
+      config({
+        sources: {
+          structureUniprot: 'https://mirror.example.org/{release}/{accession}',
+        },
+      }),
+      { release: '1' }
+    );
+    await ready(el);
+    el.dataset.release = '2';
+    const structure = () => el.querySelector('protvista-uniprot-structure');
+    await vi.waitFor(() => {
+      if (
+        structure()?.getAttribute('uniprot-url') !==
+        'https://mirror.example.org/2/P05067'
+      ) {
+        throw new Error('not handed on yet');
+      }
+    });
+  });
 });
 
 describe('the structure panel URLs', () => {
