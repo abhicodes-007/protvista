@@ -202,19 +202,15 @@ export interface NoteOptions {
   noteKey?: string;
 }
 
-/** What clears a note of this phase (see {@link Note}'s `lifecycle`). */
-const noteLifecycle = (phase: ErrorPhase): Note['lifecycle'] =>
-  phase === 'config' ? 'config' : phase === 'set-track-data' ? 'api' : 'load';
-
 /** A warning's first note, before any repeat. */
 function newNote(
   anchor: string,
   report: FailureReport,
   texts: string[],
+  issues: ValidationIssue[],
   opts: NoteOptions,
   channel: FailureChannels['notice']
 ): Note {
-  const issues = opts.issues ?? [];
   return {
     anchor,
     phase: report.phase,
@@ -226,7 +222,13 @@ function newNote(
     ...(opts.noticeFacts ? { facts: opts.noticeFacts } : {}),
     ...(opts.noticeKeys ? { factKeys: opts.noticeKeys } : {}),
     ...(opts.noteKey !== undefined ? { key: opts.noteKey } : {}),
-    lifecycle: noteLifecycle(report.phase),
+    // What clears it (see {@link Note}'s `lifecycle`).
+    lifecycle:
+      report.phase === 'config'
+        ? 'config'
+        : report.phase === 'set-track-data'
+          ? 'api'
+          : 'load',
     repeat: 1,
   };
 }
@@ -250,7 +252,7 @@ export function upsertNote(
   const texts = issues.length
     ? issues.map((i) => i.message)
     : [stripTag(opts.panelSummary ?? report.message)];
-  const same = notes.find(
+  const at = notes.findIndex(
     (n) =>
       n.anchor === anchor &&
       n.phase === report.phase &&
@@ -259,28 +261,24 @@ export function upsertNote(
         ? n.key === opts.noteKey
         : n.texts.join('\n') === texts.join('\n'))
   );
-  if (same) {
+  if (at !== -1) {
     // Three identical `setTrackData()` misuses are three calls. A load or
     // config warning reported again — a targeted Retry re-reporting a
     // skipped template it shares — is the same fact, not a second one.
+    const same = notes[at];
     return same.lifecycle === 'api'
-      ? notes.map((n) => (n === same ? { ...n, repeat: n.repeat + 1 } : n))
+      ? [
+          ...notes.slice(0, at),
+          { ...same, repeat: same.repeat + 1 },
+          ...notes.slice(at + 1),
+        ]
       : notes;
   }
   if (notes.filter((n) => n.anchor === anchor).length >= MAX_NOTES_PER_ANCHOR) {
     return notes;
   }
-  return [...notes, newNote(anchor, report, texts, opts, channel)];
+  return [...notes, newNote(anchor, report, texts, issues, opts, channel)];
 }
-
-/**
- * The mount panel's detail lines for a report: the developer line without
- * the console's tag, then where it came from, when that is known.
- */
-export const panelDetail = (report: FailureReport): string[] => [
-  stripTag(report.message),
-  ...(report.source !== undefined ? [NOTE_UI.source(report.source)] : []),
-];
 
 /** The `detail` of a `protvista-error` event. */
 export interface ErrorDetail {
@@ -293,15 +291,19 @@ export interface ErrorDetail {
 }
 
 /**
- * A `protvista-error` event's `detail`: `message` is what a person reads
- * (the caller passes it untagged, and the panel's summary when there is one),
- * and `context` is the caller's merged over `{ accession }`.
+ * A `protvista-error` event's `detail`: `message` is what a person reads —
+ * the panel's summary when there is one, and never the console's
+ * `[protvista…]` tag — and `context` is the caller's merged over
+ * `{ accession }`.
  */
 export function buildErrorDetail(
   report: FailureReport,
-  opts: { issues?: ValidationIssue[]; context?: ErrorContext },
-  accession: string | undefined,
-  message: string
+  opts: {
+    issues?: ValidationIssue[];
+    context?: ErrorContext;
+    panelSummary?: string;
+  },
+  accession: string | undefined
 ): ErrorDetail {
   return {
     phase: report.phase,
@@ -319,7 +321,7 @@ export function buildErrorDetail(
     // the panel carries the panel's own summary rather than the
     // developer line, and the console's `[protvista…]` tag is dropped:
     // the documented use is putting this text in front of a user.
-    message,
+    message: stripTag(opts.panelSummary ?? report.message),
     ...(report.source !== undefined ? { source: report.source } : {}),
     issues: opts.issues ?? [],
     context: { accession, ...opts.context },

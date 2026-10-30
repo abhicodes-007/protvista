@@ -172,7 +172,6 @@ import {
   NOTICE_TEXT,
   buildErrorDetail,
   mergeFacts,
-  panelDetail,
   stripTag,
   upsertNote,
   type Note,
@@ -3157,9 +3156,6 @@ class ProtvistaUniprot extends LitElement {
     } = {}
   ): FailureChannels {
     const channels = this._route(report);
-    // What a person reads: the panel's summary when there is one, and never
-    // the console's `[protvista…]` tag.
-    const personMessage = stripTag(opts.panelSummary ?? report.message);
 
     if (channels.console) {
       console[channels.console](report.message, ...(opts.consoleArgs ?? []));
@@ -3168,7 +3164,7 @@ class ProtvistaUniprot extends LitElement {
     if (channels.event) {
       this.dispatchEvent(
         new CustomEvent('protvista-error', {
-          detail: buildErrorDetail(report, opts, this.accession, personMessage),
+          detail: buildErrorDetail(report, opts, this.accession),
           bubbles: true,
         })
       );
@@ -3180,7 +3176,12 @@ class ProtvistaUniprot extends LitElement {
         opts.panelSummary ?? report.message.split('\n')[0],
         opts.issues,
         channels.retry,
-        panelDetail(report)
+        [
+          stripTag(report.message),
+          ...(report.source !== undefined
+            ? [NOTE_UI.source(report.source)]
+            : []),
+        ]
       );
     }
 

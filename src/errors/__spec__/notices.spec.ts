@@ -14,7 +14,6 @@ import {
   NOTE_UI,
   buildErrorDetail,
   mergeFacts,
-  panelDetail,
   plural,
   stripTag,
   upsertNote,
@@ -238,6 +237,23 @@ describe('recording a warning as a note', () => {
     expect(twice[0].repeat).toBe(2);
   });
 
+  it('counts a repeat in place, leaving the notes around it as they were', () => {
+    const misuse = warning({ phase: 'set-track-data', scope: 'viewer' });
+    let notes = upsertNote([], warning({ message: 'before' }), {}, null);
+    notes = upsertNote(notes, misuse, {}, null);
+    notes = upsertNote(notes, warning({ message: 'after' }), {}, null);
+    const counted = upsertNote(notes, misuse, {}, null);
+    expect(counted.map((n) => n.texts[0])).toEqual([
+      'before',
+      '2 features out of range.',
+      'after',
+    ]);
+    expect(counted.map((n) => n.repeat)).toEqual([1, 2, 1]);
+    expect(counted[0]).toBe(notes[0]);
+    expect(counted[2]).toBe(notes[2]);
+    expect(notes[1].repeat).toBe(1);
+  });
+
   it('keeps a repeated load or config warning as one note', () => {
     const report = warning();
     const once = upsertNote([], report, {}, null);
@@ -289,8 +305,8 @@ describe('the protvista-error event detail', () => {
     message: '[protvista-uniprot] failed',
   };
 
-  it('carries the message given, empty issues, and the accession', () => {
-    expect(buildErrorDetail(report, {}, 'P05067', 'failed')).toEqual({
+  it('carries the untagged message, empty issues, and the accession', () => {
+    expect(buildErrorDetail(report, {}, 'P05067')).toEqual({
       phase: 'track-fetch',
       severity: 'error',
       message: 'failed',
@@ -307,8 +323,7 @@ describe('the protvista-error event detail', () => {
       buildErrorDetail(
         { ...report, source: 'https://x/y' },
         { issues, context: { accession: 'Q1', url: 'https://x/y' } },
-        'P05067',
-        'failed'
+        'P05067'
       )
     ).toEqual({
       phase: 'track-fetch',
@@ -320,11 +335,10 @@ describe('the protvista-error event detail', () => {
     });
   });
 
-  it('gives the panel the untagged line, then the source when there is one', () => {
-    expect(panelDetail(report)).toEqual(['failed']);
-    expect(panelDetail({ ...report, source: 'https://x/y' })).toEqual([
-      'failed',
-      'Source: https://x/y',
-    ]);
+  it('says what the panel says, when it has its own summary', () => {
+    expect(
+      buildErrorDetail(report, { panelSummary: 'Could not load' }, 'P05067')
+        .message
+    ).toBe('Could not load');
   });
 });
