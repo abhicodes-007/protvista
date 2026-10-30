@@ -798,34 +798,52 @@ function checkRows(
 }
 
 /**
- * The rendering fields only one built-in component reads, and what it does
+ * The rendering fields only some built-in components read, and what they do
  * with them. `getTrack()` hands `color`, `shape` and `layout` to the canvas
- * feature track alone and `colorScale` (as `scale` / `color-range`) to the
- * coloured sequence alone; the other built-ins have no such attribute.
- * `height` is not here: every built-in reads it.
+ * feature track alone, and `colorScale` reaches the coloured sequence (as
+ * `scale` / `color-range`) and the heatmap (as its per-cell colour, set by
+ * `_setHeatmapData`); the other built-ins have no such attribute. `height`
+ * is not here: every built-in reads it.
  */
 const SINGLE_COMPONENT_FIELDS = [
   {
     field: 'color',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'colours its features.',
   },
   {
     field: 'shape',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'draws feature glyphs.',
   },
   {
     field: 'layout',
-    component: 'nightingale-track-canvas',
+    components: ['nightingale-track-canvas'],
     does: 'lays features out in rows.',
   },
   {
     field: 'colorScale',
-    component: 'nightingale-colored-sequence',
-    does: 'draws a colour scale.',
+    components: [
+      'nightingale-colored-sequence',
+      'nightingale-sequence-heatmap',
+    ],
+    does: 'draw a colour scale.',
   },
 ] as const;
+
+/**
+ * Components that read a field on a track but not as a group's collapsed
+ * row. The heatmap takes its cells and colours through `_setHeatmapData`,
+ * which draws a track's own payload only, so a heatmap aggregate never shows
+ * a group's `colorScale`.
+ */
+const TRACK_ONLY_READERS: Readonly<
+  Partial<
+    Record<(typeof SINGLE_COMPONENT_FIELDS)[number]['field'], readonly string[]>
+  >
+> = {
+  colorScale: ['nightingale-sequence-heatmap'],
+};
 
 /**
  * Extra advice for a canvas feature track that ignores `colorScale`: its
@@ -866,7 +884,7 @@ function ignoresField(
 ): boolean {
   return (
     (RENDERABLE_COMPONENT_NAMES as ReadonlySet<string>).has(component) &&
-    component !== entry.component
+    !(entry.components as readonly string[]).includes(component)
   );
 }
 
@@ -890,7 +908,7 @@ function checkTrackRenderingFields(
     issues.push({
       path: trackPath,
       severity: 'warning',
-      message: `Track ${trackPath}: rendering.${entry.field} has no effect on ${component}; only ${entry.component} ${entry.does}${featureColorHint(entry.field, [component])}`,
+      message: `Track ${trackPath}: rendering.${entry.field} has no effect on ${component}; only ${entry.components.join(' and ')} ${entry.does}${featureColorHint(entry.field, [component])}`,
       code: 'rendering-field-ignored',
     });
   }
@@ -900,7 +918,8 @@ function checkTrackRenderingFields(
  * Warn when a group sets a single-component rendering field that reaches no
  * component able to use it: not the collapsed aggregate, and not any track
  * that inherits it (one that sets the field itself, or whose kind presets
- * it, does not inherit the group's).
+ * it, does not inherit the group's). An aggregate that reads the field only
+ * on a track (`TRACK_ONLY_READERS`) does not count.
  */
 function checkGroupRenderingFields(
   group: GroupConfig,
@@ -909,23 +928,28 @@ function checkGroupRenderingFields(
 ): void {
   for (const entry of SINGLE_COMPONENT_FIELDS) {
     if (group.rendering?.[entry.field] === undefined) continue;
-    const components = [
-      aggregateComponent(group, registry),
-      ...group.tracks
-        .filter(
-          (t) =>
-            t.rendering?.[entry.field] === undefined &&
-            (t.kind
-              ? registry.getSemanticKind(t.kind)?.rendering?.[entry.field]
-              : undefined) === undefined
-        )
-        .map((t) => trackComponent(group, t, registry)),
-    ];
-    if (!components.every((c) => ignoresField(c, entry))) continue;
+    const aggregate = aggregateComponent(group, registry);
+    const aggregateTrackOnly =
+      TRACK_ONLY_READERS[entry.field]?.includes(aggregate) ?? false;
+    const inheritors = group.tracks
+      .filter(
+        (t) =>
+          t.rendering?.[entry.field] === undefined &&
+          (t.kind
+            ? registry.getSemanticKind(t.kind)?.rendering?.[entry.field]
+            : undefined) === undefined
+      )
+      .map((t) => trackComponent(group, t, registry));
+    const components = [aggregate, ...inheritors];
+    if (!aggregateTrackOnly && !ignoresField(aggregate, entry)) continue;
+    if (!inheritors.every((c) => ignoresField(c, entry))) continue;
+    const trackOnlyHint = aggregateTrackOnly
+      ? ` A ${aggregate} reads it on its own track, not as a group's collapsed row.`
+      : '';
     issues.push({
       path: group.id,
       severity: 'warning',
-      message: `Group ${group.id}: rendering.${entry.field} has no effect on any of its tracks; only ${entry.component} ${entry.does}${featureColorHint(entry.field, components)}`,
+      message: `Group ${group.id}: rendering.${entry.field} has no effect on any of its tracks; only ${entry.components.join(' and ')} ${entry.does}${trackOnlyHint}${featureColorHint(entry.field, components)}`,
       code: 'rendering-field-ignored',
     });
   }

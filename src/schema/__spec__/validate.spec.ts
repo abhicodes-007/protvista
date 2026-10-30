@@ -861,7 +861,7 @@ describe('validateConfig — rendering fields with no effect', () => {
         path: 'G/hits',
         severity: 'warning',
         message:
-          "Track G/hits: rendering.colorScale has no effect on nightingale-track-canvas; only nightingale-colored-sequence draws a colour scale. To colour single features, give them a 'color' column.",
+          "Track G/hits: rendering.colorScale has no effect on nightingale-track-canvas; only nightingale-colored-sequence and nightingale-sequence-heatmap draw a colour scale. To colour single features, give them a 'color' column.",
         code: 'rendering-field-ignored',
       },
     ]);
@@ -886,7 +886,8 @@ describe('validateConfig — rendering fields with no effect', () => {
     expect(ignored(result.issues)).toEqual([]);
   });
 
-  it('does not tell a heatmap to add a feature color column', () => {
+  it('does not warn for colorScale on a heatmap track', () => {
+    // The heatmap colours each cell from its resolved colorScale.
     const result = validateConfig(
       {
         rows: [
@@ -900,9 +901,86 @@ describe('validateConfig — rendering fields with no effect', () => {
       },
       freshRegistry()
     );
-    expect(ignored(result.issues).map((i) => i.message)).toEqual([
-      'Track am: rendering.colorScale has no effect on nightingale-sequence-heatmap; only nightingale-colored-sequence draws a colour scale.',
+    expect(ignored(result.issues)).toEqual([]);
+  });
+
+  it('warns on a group whose colorScale reaches only its heatmap aggregate', () => {
+    // The heatmap track's kind presets its own ramp, so it does not inherit
+    // the group's; the collapsed row is a heatmap too, and `_setHeatmapData`
+    // draws per-track payloads only, so the group's colorScale shows nowhere.
+    const result = validateConfig(
+      {
+        rows: [
+          {
+            id: 'G',
+            rendering: { colorScale: { theme: 'alphafold-ramp' } },
+            tracks: [
+              {
+                id: 'am',
+                kind: 'alphamissense-heatmap',
+                data: 'https://example.org/x',
+              },
+            ],
+          },
+        ],
+      },
+      freshRegistry()
+    );
+    expect(ignored(result.issues)).toEqual([
+      {
+        path: 'G',
+        severity: 'warning',
+        message:
+          "Group G: rendering.colorScale has no effect on any of its tracks; only nightingale-colored-sequence and nightingale-sequence-heatmap draw a colour scale. A nightingale-sequence-heatmap reads it on its own track, not as a group's collapsed row.",
+        code: 'rendering-field-ignored',
+      },
     ]);
+  });
+
+  it('warns on a heatmap group whose only track sets its own colorScale', () => {
+    const result = validateConfig(
+      {
+        rows: [
+          {
+            id: 'G',
+            component: 'nightingale-sequence-heatmap',
+            rendering: { colorScale: { theme: 'alphafold-ramp' } },
+            tracks: [
+              {
+                id: 'hm',
+                component: 'nightingale-sequence-heatmap',
+                data: 'https://example.org/x',
+                rendering: { colorScale: { theme: 'alphamissense-ramp' } },
+              },
+            ],
+          },
+        ],
+      },
+      freshRegistry()
+    );
+    expect(ignored(result.issues).map((i) => i.path)).toEqual(['G']);
+  });
+
+  it('does not warn for a group colorScale a heatmap track inherits', () => {
+    const result = validateConfig(
+      {
+        rows: [
+          {
+            id: 'G',
+            rendering: { colorScale: { theme: 'alphafold-ramp' } },
+            tracks: [
+              {
+                id: 'hm',
+                component: 'nightingale-sequence-heatmap',
+                data: 'https://example.org/x',
+              },
+            ],
+          },
+        ],
+      },
+      freshRegistry()
+    );
+    expect(ignored(result.issues)).toEqual([]);
   });
 
   it('warns once, on the group, when no track of a group can use its colorScale', () => {
@@ -927,7 +1005,7 @@ describe('validateConfig — rendering fields with no effect', () => {
         path: 'G',
         severity: 'warning',
         message:
-          "Group G: rendering.colorScale has no effect on any of its tracks; only nightingale-colored-sequence draws a colour scale. To colour single features, give them a 'color' column.",
+          "Group G: rendering.colorScale has no effect on any of its tracks; only nightingale-colored-sequence and nightingale-sequence-heatmap draw a colour scale. To colour single features, give them a 'color' column.",
         code: 'rendering-field-ignored',
       },
     ]);
