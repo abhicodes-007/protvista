@@ -160,6 +160,13 @@ import {
   type FailureCode,
   type FailureReport,
 } from './errors/router.js';
+import {
+  classifyTrackOutcomes,
+  whollyFailedGroups,
+  type FetchErrorKind,
+  type TrackAbsence,
+  type TrackFetchError,
+} from './errors/track-outcomes.js';
 import type { FormattedError } from './errors/format.js';
 import {
   NOTE_UI,
@@ -262,93 +269,6 @@ interface Note {
   /** How many identical `api` notes this one stands for. */
   repeat: number;
 }
-
-/**
- * How a track's data failed. See `_trackErrors`.
- *
- * The first three are transport outcomes, classified by the fetch closure in
- * `_loadData`. `adapter` is the processing outcome: the body arrived fine but
- * the decoder, the shape validator or the named adapter threw on it — a
- * malformed file, which is an authoring error and not a service one.
- * `render` is the last step: the payload was built, and the Nightingale
- * element rejected it when handed over (see `_assignComponentData`).
- */
-type FetchErrorKind = 'network' | 'http' | 'parse' | 'adapter' | 'render';
-
-/** A single track's data failure, correlated to its group/track. */
-type TrackFetchError = {
-  /** The URL that failed. Empty for an `adapter` failure on a non-URL source. */
-  url: string;
-  kind: FetchErrorKind;
-  /** Present only for `kind: 'http'`. */
-  status?: number;
-  /**
-   * The thrown error's own text. For `kind: 'adapter'` it already names the
-   * author's file and the offending row, which is exactly what the badge
-   * should say. For `kind: 'parse'` it is the parser's complaint (where in
-   * the body it gave up), appended to the derived wording. Absent for the
-   * other transport kinds, whose wording is derived.
-   */
-  message?: string;
-  /**
-   * The thrown value behind a `network` or `parse` failure, for the console
-   * line — the stack and the parser's position, which the derived wording
-   * leaves out.
-   */
-  cause?: unknown;
-  /**
-   * Whether the location is the author's own rather than a provider
-   * endpoint. For a transport failure that is any descriptor with a `format`
-   * (`isAuthoredSource`) or written as `from: file` — however it was written
-   * (`./hits.csv`, an absolute URL, `{ url: … }`, a file with an explicit
-   * `adapter:`), nothing publishes data at it conditionally, so it is what
-   * makes a 4xx *broken* (a wrong path or URL) instead of *missing* (this
-   * entity has no data of this kind). For an `adapter` failure it is only
-   * `isAuthoredSource`: it decides whether the decoder's own text, which names
-   * the file, can stand alone. See `_isRecoverable`.
-   */
-  authored?: boolean;
-  /**
-   * Whether the source was the `from: file` shorthand — a page-relative
-   * path. Selects the path-specific wording only; see `_describeFetchError`.
-   */
-  fromFile?: boolean;
-  /**
-   * For `kind: 'adapter'`: the loader's `TrackProcessingFailure.retryable` —
-   * a provider adapter's own throw, which may be transient.
-   */
-  retryable?: boolean;
-  groupId: string;
-  /**
-   * The track that failed, or `null` for the row's *aggregate* — the single
-   * payload a collapsed group draws all its tracks from. Only a `render`
-   * failure can be aggregate-scoped: the aggregate is built from per-track
-   * data that already loaded, so nothing upstream of the handover can fail
-   * on it alone.
-   */
-  trackId: string | null;
-};
-
-/** A track-less fetch failure, as the fetch closure in `_loadData` records it. */
-type UrlFetchError = Omit<TrackFetchError, 'groupId' | 'trackId'>;
-
-/** Every fetch failure among one track's URLs, in URL order. */
-const trackFetchFailures = (
-  urls: readonly string[] | undefined,
-  fetchErrors: ReadonlyMap<string, UrlFetchError>
-): UrlFetchError[] =>
-  (urls ?? []).flatMap((u) => {
-    const err = fetchErrors.get(u);
-    return err ? [err] : [];
-  });
-
-/**
- * A provider endpoint answering 4xx: the entity has no data of this kind,
- * which is an expected absence rather than a failure. Never true for an
- * authored source, where the same status means the path or URL is wrong.
- */
-const isExpectedAbsence = (err: UrlFetchError, authored: boolean): boolean =>
-  err.kind === 'http' && (err.status ?? 0) < 500 && !authored;
 
 /**
  * Outcome of the top-level sequence fetch (`loadEntry`). Either the parsed
@@ -3550,7 +3470,9 @@ class ProtvistaUniprot extends LitElement {
    * URL each track fetched), so this never re-derives the substitution.
    * `fetchErrors` is the transport outcome per URL and `trackFailures` the
    * processing outcome per track — neither source logs or renders anything
-   * itself, so this is the only place either reaches a person.
+   * itself, so this is the only place either reaches a person. Which of them
+   * are *broken* and which are expected absences is `classifyTrackOutcomes`'
+   * answer.
    *
    * Each failure becomes a {@link FailureReport} handed to `_report`, which
    * routes it. The panel is the one channel this method performs itself
@@ -3583,90 +3505,37 @@ class ProtvistaUniprot extends LitElement {
     // own them. Untouched tracks aren't in `trackUrls` on a partial
     // reload, so their errors (cleared above only for the reloaded set)
     // are left intact.
-    //
-    // An HTTP 4xx from a *provider endpoint* is NOT a track error: it means
-    // "this accession has no data of this kind" (a 404 is the common case).
-    // We want the viewer to flag things that are *broken*, not *missing* — so
-    // that 4xx is treated exactly like an empty response: the track simply
-    // has no data and is hidden, with no badge, event, or panel.
-    //
-    // An *authored* source — the author's own data, a descriptor with a
-    // `format` — is the opposite case, however it was written: `./hits.csv`,
-    // an absolute URL, or the `{ url: … }` object form. The author wrote that
-    // location themselves, and nothing publishes data at it conditionally — a
-    // 404 can only mean the path or URL is wrong, which is the single most
-    // common authoring mistake (a relative path resolves against the *hosting
-    // page*, not the config file). The descriptor already says which kind of
-    // source it is, so the classification reads it rather than discarding it.
-    //
-    // `from: file` is the author's location too, even when it names an
-    // explicit `adapter:` instead of a `format` — the very descriptor the
-    // validator recommends for a file it cannot sniff — so it counts here
-    // alongside `isAuthoredSource` (`ownsLocation`).
-    //
-    // A track can fetch several URLs (an AlphaFold track reads the prediction
-    // API *and* the Proteins API), so every one of its failures is weighed,
-    // not just the first: a 503 on one URL must not hide behind a provider 404
-    // on another.
-    for (const group of this.config.rows) {
-      for (const track of group.tracks) {
-        const key = `${group.id}-${track.id}`;
-        const authored = isAuthoredSource(track.data[0]);
-        const fromFile = track.data[0]?.from === 'file';
-        const ownsLocation = authored || fromFile;
-        const failed = trackFetchFailures(trackUrls[key], fetchErrors);
-        const broken = failed.find((e) => !isExpectedAbsence(e, ownsLocation));
-        if (broken) {
-          this._trackErrors.set(key, {
-            ...broken,
-            ...(ownsLocation ? { authored: true } : {}),
-            ...(fromFile ? { fromFile } : {}),
-            groupId: group.id,
-            trackId: track.id,
-          });
-          continue;
-        }
-        // Only provider 4xxs — missing, not broken. Logged by the pass below.
-        if (failed.length > 0) continue;
-        // A track whose *processing* threw: a malformed file, a body the
-        // adapter rejected, or an unregistered adapter name. Only reached
-        // when none of the track's fetches failed — when one did, that
-        // outcome is the explanation, and an adapter choking on the empty
-        // body left behind must not resurrect a deliberately-silent 4xx.
-        //
-        // Severity gates this: an `info` outcome (a `from: custom` track
-        // nobody injected data into) is an expected absence, so it must not
-        // land in `_trackErrors` — that map is what draws badges and counts
-        // towards a group being wholly broken.
-        const failure = trackFailures[key];
-        if (failure?.severity !== 'error') continue;
-        this._trackErrors.set(key, {
-          url: trackUrls[key]?.[0] ?? '',
-          kind: 'adapter',
-          message: failure.message,
-          ...(authored ? { authored } : {}),
-          ...(failure.retryable ? { retryable: true } : {}),
-          groupId: group.id,
-          trackId: track.id,
-        });
-      }
-    }
+    const { errors, absences } = classifyTrackOutcomes(
+      this.config,
+      trackUrls,
+      fetchErrors,
+      trackFailures,
+      only
+    );
+    for (const [key, err] of errors) this._trackErrors.set(key, err);
 
     // Recompute the "every track failed" set from the final error map.
-    this._groupErrors = new Set();
-    for (const group of this.config.rows) {
-      if (
-        group.tracks.length > 0 &&
-        group.tracks.every((t) => this._trackErrors.has(`${group.id}-${t.id}`))
-      ) {
-        this._groupErrors.add(group.id);
-      }
-    }
+    this._groupErrors = whollyFailedGroups(this.config.rows, this._trackErrors);
 
-    // Report every track that (re)failed in THIS batch — for a partial
-    // reload, only the reloaded tracks that still fail. `deferPanel` holds
-    // back the panel channel so the aggregate below owns it; everything else
-    // (console, event) is performed per track as routed.
+    const panelWanted = this._reportTrackFailures(trackFailures, only);
+    this._reportExpectedAbsences(absences);
+
+    this._syncTrackPanel(panelWanted);
+    this.requestUpdate();
+  }
+
+  /**
+   * Report every track that (re)failed in THIS batch — for a partial
+   * reload, only the reloaded tracks that still fail. `deferPanel` holds
+   * back the panel channel so the aggregate (`_syncTrackPanel`) owns it;
+   * everything else (console, event) is performed per track as routed.
+   *
+   * Returns whether any of them wanted the panel.
+   */
+  private _reportTrackFailures(
+    trackFailures: Record<string, TrackProcessingFailure>,
+    only?: Set<string>
+  ): boolean {
     const failedKeys = [...this._trackErrors.keys()].filter(
       (k) => !only || only.has(k)
     );
@@ -3699,62 +3568,32 @@ class ProtvistaUniprot extends LitElement {
       });
       panelWanted = panelWanted || channels.panel;
     }
+    return panelWanted;
+  }
 
-    // A provider endpoint answering 4xx is an expected absence, not a
-    // failure — the entity simply has no data of this kind. It routes to the
-    // console and nowhere else (`info`), which is the one thing the old code
-    // got backwards: it logged from the fetch closure, where the log could
-    // not know whose track the URL belonged to, and dropped the fact
-    // entirely once the closure stopped being the reporter.
-    for (const group of this.config.rows) {
-      for (const track of group.tracks) {
-        const key = `${group.id}-${track.id}`;
-        if (this._trackErrors.has(key)) continue;
-        if (only && !only.has(key)) continue;
-        // The only fetch failures the loop above leaves unpromoted: 4xxs from
-        // provider endpoints. Spelt out rather than inferred so the two halves
-        // of the classification cannot drift apart. One line per URL, so a
-        // track reading two endpoints says which of them had nothing.
-        const ownsLocation =
-          isAuthoredSource(track.data[0]) || track.data[0]?.from === 'file';
-        const absent = trackFetchFailures(trackUrls[key], fetchErrors).filter(
-          (e) => isExpectedAbsence(e, ownsLocation)
-        );
-        for (const skipped of absent) {
-          this._report(
-            {
-              severity: 'info',
-              phase: 'track-fetch',
-              scope: { trackKey: key },
-              source: skipped.url,
-              message: `[protvista-uniprot] track ${group.id}/${track.id}: no data (HTTP ${skipped.status}) at ${skipped.url}.`,
-              consoleLevel: 'info',
-            },
-            { context: { groupId: group.id, trackId: track.id } }
-          );
-        }
-        if (absent.length > 0) continue;
-        // `from: custom` with nothing injected. Same expected absence; the
-        // message is the documented one `load-data.ts` builds, passed through
-        // unchanged.
-        const failure = trackFailures[key];
-        if (failure?.severity === 'info') {
-          this._report(
-            {
-              severity: 'info',
-              phase: 'track-fetch',
-              scope: { trackKey: key },
-              message: failure.message,
-              consoleLevel: 'info',
-            },
-            { context: { groupId: group.id, trackId: track.id } }
-          );
-        }
-      }
+  /**
+   * A provider endpoint answering 4xx is an expected absence, not a
+   * failure — the entity simply has no data of this kind. It routes to the
+   * console and nowhere else (`info`), which is the one thing the old code
+   * got backwards: it logged from the fetch closure, where the log could
+   * not know whose track the URL belonged to, and dropped the fact
+   * entirely once the closure stopped being the reporter. A `from: custom`
+   * track nobody injected data into is the same expected absence.
+   */
+  private _reportExpectedAbsences(absences: readonly TrackAbsence[]): void {
+    for (const absence of absences) {
+      this._report(
+        {
+          severity: 'info',
+          phase: 'track-fetch',
+          scope: { trackKey: absence.key },
+          ...(absence.source !== undefined ? { source: absence.source } : {}),
+          message: absence.message,
+          consoleLevel: 'info',
+        },
+        { context: { groupId: absence.groupId, trackId: absence.trackId } }
+      );
     }
-
-    this._syncTrackPanel(panelWanted);
-    this.requestUpdate();
   }
 
   /**
